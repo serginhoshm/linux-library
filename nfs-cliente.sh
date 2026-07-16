@@ -4,6 +4,7 @@ set -euo pipefail
 
 LOCAL_NET=""
 MOUNT_OPTS="rw,soft,timeo=50,retrans=2,_netdev"
+FSTAB_MOUNT_OPTS="${MOUNT_OPTS},nofail,x-systemd.automount,x-systemd.mount-timeout=10s"
 TEST_MOUNT_OPTS="rw,soft,timeo=50,retrans=2"
 CLIENT_SERVICE_HINT=""
 
@@ -418,7 +419,7 @@ write_fstab_entry() {
     local mountpoint="$2"
     local tmp_file line
 
-    line="${remote} ${mountpoint} nfs ${MOUNT_OPTS} 0 0"
+    line="${remote} ${mountpoint} nfs ${FSTAB_MOUNT_OPTS} 0 0"
     tmp_file="$(mktemp)"
 
     awk -v remote="${remote}" -v mountpoint="${mountpoint}" '
@@ -479,7 +480,7 @@ mount_and_persist() {
         remove_fstab_entry "${server_ip}:${remote_export}" "${mountpoint}"
         write_fstab_entry "${remote}" "${mountpoint}"
     fi
-    echo "Persistencia aplicada no /etc/fstab."
+    echo "Persistencia aplicada no /etc/fstab (boot tolerante + automount sob demanda)."
 
     pause_menu
 }
