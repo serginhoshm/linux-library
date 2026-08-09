@@ -1,126 +1,156 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# Aborta o script se ocorrer algum erro crítico inesperado
-set -e
+set -Eeuo pipefail
 
-# Garante que o script está sendo rodado como root
-if [ "$EUID" -ne 0 ]; then
-  echo "[ERRO] Por favor, execute este script usando sudo."
-  exit 1
-fi
+DEFAULT_SHARE_PATH="/mnt/1TBVOL"
+SHARE_PATH_WAS_SET="${SHARE_PATH+x}"
+SHARE_PATH="${SHARE_PATH:-$DEFAULT_SHARE_PATH}"
+SHARE_NAME="${SHARE_NAME:-}"
+SMB_CONF="/etc/samba/smb.conf"
 
-echo "=================================================="
-echo " Configuração Automatizada e Resiliente do Samba  "
-echo "=================================================="
-
-# 1. Detectar o gerenciador de pacotes da distribuição
-if [ -x "$(command -v apt)" ]; then
-    PKG_MANAGER="apt"
-    UPDATE_CMD="apt update"
-    INSTALL_CMD="apt install -y"
-    SERVICES=("smbd" "nmbd" "wsdd")
-elif [ -x "$(command -v dnf)" ]; then
-    PKG_MANAGER="dnf"
-    UPDATE_CMD="dnf check-update"
-    INSTALL_CMD="dnf install -y"
-    SERVICES=("smb" "nmbd" "wsdd")
-else
-    echo "[ERRO] Distribuição não suportada automaticamente (requer APT ou DNF)."
+if [[ $EUID -ne 0 ]]; then
+    echo "[ERRO] Execute este script usando sudo." >&2
     exit 1
 fi
 
-# 2. Instalar pacotes necessários (O gerenciador ignora se já estiverem instalados)
-echo "[1/5] Verificando e instalando pacotes (Samba, WSDD, Sed)..."
-$UPDATE_CMD || true
-$INSTALL_CMD samba wsdd sed
+if [[ -z $SHARE_PATH_WAS_SET ]] && { [[ ! -d $SHARE_PATH ]] || ! mountpoint --quiet "$SHARE_PATH"; }; then
+    echo "[AVISO] O volume padrão $DEFAULT_SHARE_PATH não foi encontrado ou não está montado."
 
-# 3. Configurar as permissões da pasta de forma resiliente
-echo "[2/5] Garantindo permissões totais em /mnt/1TBVOL..."
-if [ -d "/mnt/1TBVOL" ]; then
-    chmod -R 777 /mnt/1TBVOL
-    chown -R nobody:nogroup /mnt/1TBVOL 2>/dev/null || chown -R nobody:nobody /mnt/1TBVOL
-else
-    echo "[AVISO] O diretório /mnt/1TBVOL não foi encontrado no momento. Criando ponto de montagem..."
-    mkdir -p /mnt/1TBVOL
-    chmod 777 /mnt/1TBVOL
-fi
-
-# 4. Modificar o arquivo smb.conf de forma limpa (Suporta múltiplas execuções)
-echo "[3/5] Ajustando o arquivo /etc/samba/smb.conf..."
-SMB_CONF="/etc/samba/smb.conf"
-
-# Criar um backup de segurança apenas se o backup original não existir
-if [ -f "$SMB_CONF" ] && [ ! -f "${SMB_CONF}.orig" ]; then
-    cp "$SMB_CONF" "${SMB_CONF}.orig"
-    echo "-> Backup original do sistema salvo em ${SMB_CONF}.orig"
-fi
-
-# Remover blocos antigos de execuções passadas para evitar duplicidade
-# Remove o bloco [1TBVOL] e tudo abaixo dele se já existir
-sed -i '/\[1TBVOL\]/,$d' "$SMB_CONF"
-
-# Adicionar a linha preventiva 'root preexec' na seção [global] se ela não existir
-# Isso força o Samba a rodar o mount -a antes de entregar o acesso, prevenindo pastas vazias
-if ! grep -q "root preexec = /bin/mount -a" "$SMB_CONF"; then
-    # Insere logo abaixo da linha identificadora [global]
-    sed -i '/\[global\]/a \   root preexec = /bin/mount -a' "$SMB_CONF"
-    echo "-> Comando de montagem forçada injetado na seção [global]."
-fi
-
-# Injetar o bloco de compartilhamento limpo no final do arquivo
-cat << 'EOF' >> "$SMB_CONF"
-
-[1TBVOL]
-   path = /mnt/1TBVOL
-   browsable = yes
-   writable = yes
-   guest ok = yes
-   guest only = yes
-   force user = nobody
-   create mask = 0777
-   directory mask = 0777
-EOF
-echo "-> Bloco [1TBVOL] reconfigurado com sucesso."
-
-# 5. Reiniciar e Habilitar os serviços
-echo "[4/5] Reiniciando e habilitando os serviços do sistema..."
-for service in "${SERVICES[@]}"; do
-    if systemctl list-unit-files --type=service --all | grep -q "^${service}\.service"; then
-        systemctl unmask "$service" 2>/dev/null || true
-        systemctl enable "$service"
-        systemctl restart "$service"
-        echo "-> Serviço $service atualizado."
-    else
-        if [ "$service" = "wsdd" ] && [ -x "$(command -v wsdd)" ]; then
-            # Fallback para distros onde o pacote wsdd não entrega unit systemd.
-            pgrep -f "[/]usr/bin/wsdd" >/dev/null && pkill -f "[/]usr/bin/wsdd" || true
-            nohup wsdd >/var/log/wsdd.log 2>&1 &
-            echo "-> wsdd iniciado em modo manual (sem unit systemd). Log: /var/log/wsdd.log"
-        else
-            echo "[AVISO] Unit ${service}.service não existe neste sistema. Pulando."
-        fi
+    if [[ ! -t 0 ]]; then
+        echo "[ERRO] Não há terminal interativo. Defina SHARE_PATH com um diretório existente." >&2
+        exit 1
     fi
-done
 
-# 6. Ajustar o Firewall de forma limpa
-echo "[5/5] Sincronizando regras de Firewall..."
-if [ -x "$(command -v ufw)" ] && systemctl is-active --quiet ufw; then
-    ufw allow samba
-    ufw reload
-    echo "-> Regras atualizadas no UFW."
-elif [ -x "$(command -v firewall-cmd)" ] && systemctl is-active --quiet firewalld; then
-    # Remove primeiro para evitar avisos de regra duplicada e adiciona novamente
-    firewall-cmd --permanent --remove-service=samba 2>/dev/null || true
-    firewall-cmd --permanent --add-service=samba
-    firewall-cmd --reload
-    echo "-> Regras atualizadas no FirewallD."
-else
-    echo "-> Nenhum firewall restritivo ativo detectado. Pulando."
+    while true; do
+        read -r -p "Informe o caminho absoluto da pasta a compartilhar: " SHARE_PATH
+
+        if [[ $SHARE_PATH == /* ]] && [[ -d $SHARE_PATH ]] && [[ $SHARE_PATH != / ]]; then
+            break
+        fi
+
+        echo "[ERRO] Informe um diretório absoluto existente, diferente de /." >&2
+    done
+fi
+
+if [[ $SHARE_PATH != /* ]] || [[ ! -d $SHARE_PATH ]] || [[ $SHARE_PATH == / ]]; then
+    echo "[ERRO] SHARE_PATH deve ser um diretório absoluto existente: $SHARE_PATH" >&2
+    exit 1
+fi
+
+SHARE_PATH="$(realpath -e -- "$SHARE_PATH")"
+SHARE_NAME="${SHARE_NAME:-$(basename -- "$SHARE_PATH")}"
+
+if [[ -z $SHARE_NAME ]] || [[ $SHARE_NAME == *'['* ]] || [[ $SHARE_NAME == *']'* ]] ||
+   [[ $SHARE_NAME == */* ]] || [[ $SHARE_NAME == *\\* ]]; then
+    echo "[ERRO] Nome de compartilhamento inválido: $SHARE_NAME" >&2
+    exit 1
 fi
 
 echo "=================================================="
-echo " Configuração concluída e testada com sucesso!   "
-echo " O volume está pronto no GNOME, Cinnamon e Android."
+echo " Configuração do Samba: [$SHARE_NAME]"
+echo " Caminho: $SHARE_PATH"
+echo "=================================================="
+
+if command -v apt-get >/dev/null; then
+    PACKAGES=(samba wsdd2)
+    SERVICES=(smbd nmbd wsdd2)
+    apt-get update
+    apt-get install -y "${PACKAGES[@]}"
+elif command -v dnf >/dev/null; then
+    PACKAGES=(samba wsdd)
+    SERVICES=(smb nmb wsdd)
+    dnf -y makecache
+    dnf install -y "${PACKAGES[@]}"
+else
+    echo "[ERRO] Distribuição não suportada automaticamente (requer APT ou DNF)." >&2
+    exit 1
+fi
+
+echo "[1/4] Ajustando acesso ao diretório compartilhado..."
+# O compartilhamento é público; não altere recursivamente arquivos já existentes.
+chmod 0777 "$SHARE_PATH"
+
+echo "[2/4] Gerando e validando $SMB_CONF..."
+if [[ ! -f $SMB_CONF ]]; then
+    echo "[ERRO] O pacote não criou $SMB_CONF." >&2
+    exit 1
+fi
+
+if [[ ! -f ${SMB_CONF}.orig ]]; then
+    cp --preserve=all "$SMB_CONF" "${SMB_CONF}.orig"
+    echo "-> Configuração original salva em ${SMB_CONF}.orig"
+fi
+
+TEMP_CONF="$(mktemp "${SMB_CONF}.XXXXXX")"
+trap 'rm -f "$TEMP_CONF"' EXIT
+
+# Remove somente a seção gerenciada, preservando compartilhamentos posteriores.
+awk -v section="$SHARE_NAME" '
+    /^\[[^]]+\][[:space:]]*$/ {
+        current = $0
+        sub(/^\[/, "", current)
+        sub(/\][[:space:]]*$/, "", current)
+        skip = (current == section)
+    }
+    !skip { print }
+' "$SMB_CONF" > "$TEMP_CONF"
+
+# Remove uma diretiva insegura criada por versões anteriores deste script.
+sed -i '/^[[:space:]]*root preexec = \/bin\/mount -a[[:space:]]*$/d' "$TEMP_CONF"
+
+if grep -q '^[[:space:]]*map to guest[[:space:]]*=' "$TEMP_CONF"; then
+    sed -i 's/^[[:space:]]*map to guest[[:space:]]*=.*/   map to guest = Bad User/' "$TEMP_CONF"
+else
+    sed -i '/^[[:space:]]*\[global\][[:space:]]*$/a\   map to guest = Bad User' "$TEMP_CONF"
+fi
+
+cat >> "$TEMP_CONF" <<EOF
+
+[$SHARE_NAME]
+   path = $SHARE_PATH
+   browsable = yes
+   read only = no
+   guest ok = yes
+   guest only = yes
+   force user = nobody
+   create mask = 0666
+   directory mask = 0777
+EOF
+
+testparm -s "$TEMP_CONF" >/dev/null
+install -o root -g root -m 0644 "$TEMP_CONF" "$SMB_CONF"
+echo "-> Configuração validada e aplicada."
+
+echo "[3/4] Habilitando e reiniciando serviços..."
+for service in "${SERVICES[@]}"; do
+    if systemctl cat "${service}.service" >/dev/null 2>&1; then
+        systemctl unmask "${service}.service" >/dev/null 2>&1 || true
+        systemctl enable --now "${service}.service"
+        systemctl restart "${service}.service"
+        echo "-> Serviço $service ativo."
+    else
+        echo "[AVISO] Unit ${service}.service não existe; verifique o pacote instalado."
+    fi
+done
+
+echo "[4/4] Sincronizando regras de firewall..."
+if command -v ufw >/dev/null && systemctl is-active --quiet ufw; then
+    ufw allow Samba
+    echo "-> Regra Samba habilitada no UFW."
+elif command -v firewall-cmd >/dev/null && systemctl is-active --quiet firewalld; then
+    firewall-cmd --permanent --add-service=samba
+    firewall-cmd --reload
+    echo "-> Regra Samba habilitada no firewalld."
+else
+    echo "-> UFW e firewalld não estão ativos."
+fi
+
+testparm -s "$SMB_CONF" >/dev/null
+systemctl --quiet is-active "${SERVICES[0]}.service"
+
+echo "=================================================="
+echo " Compartilhamento //$HOSTNAME/$SHARE_NAME pronto."
+echo " AVISO: acesso de convidado com escrita está ativo."
 echo "=================================================="
 
 
