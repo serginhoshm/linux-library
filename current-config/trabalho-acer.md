@@ -1,3 +1,6 @@
+# Acer Nitro AN515-55
+Uso profissional: Project Manager / Associate Product Manager (APM)
+
 System:
   Host: sergio85-Nitro-AN515-55 Kernel: 6.17.0-35-generic arch: x86_64
     bits: 64
