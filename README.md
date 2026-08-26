@@ -1,25 +1,64 @@
 # linux-kb
-# 🗺️ Logbook for my Linux distro-hopping journeys
+# 🗺️ Logbook para distros Linux
 
-Bem-vindo ao meu diário de bordo e porto seguro no mundo Linux! 🐧✨
+Este repositório reúne scripts e rotinas de pós-instalação organizados por distribuição. A ideia é manter cada ambiente separado e pronto para reutilização em novas instalações.
 
-Como um legítimo **distro-hopper**, mudar de distribuição é quase um hobby, mas reconfigurar tudo do zero a cada nova instalação não precisa ser uma dor de cabeça. Este repositório é a minha base de conhecimento central e o baú onde guardo toda a parafernália, ferramentas e macetes indispensáveis para as minhas aventuras pelo ecossistema Linux.
+## Estrutura
 
-## 🚀 O que você encontra por aqui?
+- [debian_trixie](debian_trixie/) — Debian Trixie
+- [fedora_44](fedora_44/) — Fedora 44
+- [zorin_os_pro_18_1](zorin_os_pro_18_1/) — Zorin OS Pro 18.1
+- [opensuse_leap_16_0](opensuse_leap_16_0/) — openSUSE Leap 16.0
+- [current-config](current-config/)
 
-Este repositório serve como um kit de sobrevivência para manter minhas configurações salvas e prontas para a próxima parada. Ele inclui:
+## Convenção de nomes
 
-* **🔧 Dotfiles & Configurações:** Arquivos de configuração customizados para deixar o sistema com a minha cara em questão de minutos (ajustes de interface, atalhos, layouts e fontes).
-* **📜 Scripts de Automação:** Scripts úteis para pós-instalação, atualização de pacotes e automação de rotinas.
-* **💡 Notas e Soluções de Problemas:** Um verdadeiro guia de sobrevivência com resoluções de problemas técnicos (como correções de drivers, travamento de versões de pacotes e certificados SSL) para não ter que reaprender tudo na próxima distro.
-* **🛠️ Minha Caixa de Ferramentas:** Uma lista dos meus aplicativos essenciais, ferramentas de CLI e extensões favoritas.
+- Os scripts usam nomes em padrão `ferramenta-acao.sh`.
+- A referência à distro foi removida do nome do arquivo.
+- Cada pasta representa uma distribuição e versão compatível específicas.
+- A pasta raiz foi mantida apenas para documentação e índices gerais.
 
-## 🧭 Próximas Paradas & Histórico
-*(Dica: use este espaço para listar as distros que você está testando ou planeja testar!)*
+## Compatibilidade por versão
 
-- [x] **Zorin OS Pro** (Atual porto seguro — customizado, estável e produtivo)
-- [ ] **Fedora** (Sempre no radar para testes futuros)
-- [ ] *Próxima aventura...*
+| Pasta | Distribuição e versão | Compatível com |
+|---|---|---|
+| [debian_trixie](debian_trixie/) | Debian Trixie | Debian 13 / Trixie |
+| [fedora_44](fedora_44/) | Fedora 44 | Fedora 44 |
+| [zorin_os_pro_18_1](zorin_os_pro_18_1/) | Zorin OS Pro 18.1 | Zorin OS Pro 18.1 |
+| [opensuse_leap_16_0](opensuse_leap_16_0/) | openSUSE Leap 16.0 | openSUSE Leap 16.0 |
+
+## Índice por distro
+
+| Pasta | Scripts principais | Observações |
+|---|---|---|
+| [debian_trixie](debian_trixie/) | `samba-config.sh`, `flatpak-install.sh`, `ftp-setup.sh`, `signal-install.sh`, `flameshot-install.sh`, `nfs-client.sh`, `nfs-server.sh`, `plex-firewall-config.sh`, `swap-config.sh`, `transmission-config.sh` | base para Debian Trixie com `apt` |
+| [fedora_44](fedora_44/) | `samba-config.sh`, `flatpak-install.sh`, `ftp-setup.sh`, `signal-install.sh`, `flameshot-install.sh`, `nfs-client.sh`, `nfs-server.sh`, `nvidia-install.sh`, `plex-firewall-config.sh`, `swap-config.sh`, `transmission-config.sh` | foco em Fedora 44 com `dnf` |
+| [zorin_os_pro_18_1](zorin_os_pro_18_1/) | `samba-config.sh`, `flatpak-install.sh`, `ftp-setup.sh`, `signal-install.sh`, `flameshot-install.sh`, `nfs-client.sh`, `nfs-server.sh`, `nvidia-install.sh`, `plex-firewall-config.sh`, `swap-config.sh`, `transmission-config.sh` | compatível com Zorin OS Pro 18.1 |
+| [opensuse_leap_16_0](opensuse_leap_16_0/) | `samba-config.sh`, `flatpak-install.sh`, `ftp-setup.sh`, `signal-install.sh`, `flameshot-install.sh`, `nfs-client.sh`, `nfs-server.sh`, `plex-firewall-config.sh`, `swap-config.sh`, `transmission-config.sh` | compatível com openSUSE Leap 16.0 |
+
+## Como usar
+
+1. Entre na pasta da sua distro.
+2. Escolha o script desejado.
+3. Dê permissão de execução:
+
+```bash
+chmod +x nome-do-script.sh
+```
+
+4. Execute com sudo quando necessário:
+
+```bash
+sudo ./nome-do-script.sh
+```
+
+## Histórico
+
+- [x] Zorin OS Pro
+- [x] Fedora
+- [x] Debian/Ubuntu
+- [ ] OpenSUSE (em expansão)
 
 ---
-*“Não existem caminhos errados no Linux, apenas novas distribuições para testar.”* 🚀
+
+*“Linux é uma aventura de distribuição em distribuição.”* 🐧
