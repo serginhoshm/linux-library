@@ -27,17 +27,18 @@ Nesta fase, problemas críticos foram resolvidos com engenharia de software manu
 1.  **Bug do Insync (Fedora 44):** Uma mudança na gestão de certificados SSL quebrou o Insync. A solução foi o **downgrade para o pacote do Fedora 43** e o uso do `dnf versionlock` para impedir atualizações que reintroduzissem o erro.
 2.  **Codecs no Vivaldi (Flatpak):** Em sistemas imutáveis, a ausência de codecs H.264 foi resolvida através de **overrides de sistema de arquivos** e a criação de links simbólicos manuais para a biblioteca `libffmpeg.so`.
 
-## 🏠 4. O Porto Seguro: Debian 13 (Trixie)
-Enquanto o trabalho exigia experimentação, o **laptop de casa (Lenovo IdeaPad 1)** foi mantido como o baluarte da estabilidade, rodando **Debian 13 (Trixie)** com GNOME 48.7. A consistência do Debian permitiu o desenvolvimento de scripts de **rsync** para manter a `/home/` sincronizada entre os diferentes ambientes.
+## 🏠 4. O Porto Seguro: openSUSE Leap 16.0 no Lenovo
+Enquanto o trabalho exige experimentação, o **laptop de casa (Lenovo IdeaPad 1)** foi mantido como ambiente estável e enxuto, rodando **openSUSE Leap 16.0**. A combinação de compatibilidade, previsibilidade e simplicidade do Leap permitiu reduzir ruído operacional e manter a base do sistema homogênea com a rotina de manutenção e scripts do repositório.
 
-## 🎨 5. Refinamento de Interface: Cinnamon e Fontes
-Recentemente, a experiência com o **Ubuntu Cinnamon 24.04.4** no trabalho trouxe novos aprendizados sobre personalização.
-*   **Estética Apple vs. Catppuccin:** Embora tenha explorado o visual macOS (WhiteSur), a escolha final recaiu sobre o tema **Catppuccin** pela modernidade e legibilidade [Conversa Anterior, 36].
-*   **Configuração de Fontes:** Implementação da **SF Mono** especificamente para o explorador de arquivos (**Nemo**) via customização de CSS em `~/.config/gtk-3.0/gtk.css`, mantendo a fonte do sistema separada da fonte do terminal [46, Conversa Anterior].
+## 🎨 5. Refinamento de Interface: Minimalismo e estabilidade
+A experiência com ambientes mais pesados e visuais excessivos levou a uma mudança de foco para **minimalismo funcional** e estabilidade de uso diário.
+*   **Estética e produtividade:** a preferência passou a priorizar clareza visual, baixo consumo de atenção e ausência de camadas desnecessárias na interface.
+*   **Configuração de fontes e desktop:** a regra passou a ser manter a aparência leve e confiável, com ajustes concentrados na produtividade e não em estética artificial.
 
-## 🚀 6. Decisão Atual: Fedora Workstation (Monolítico)
-Após as frustrações com sistemas imutáveis ("engessados") e os Snaps forçados do Ubuntu, a decisão para o Acer Nitro em 2026 é o **Fedora Workstation tradicional** [Chat History].
-*   **Por que Fedora?** Oferece o **GNOME Vanilla** puro (focado em busca espacial com a tecla Super), suporte Nvidia facilitado via RPM Fusion e a modernidade do **Wayland**, que resolve definitivamente os antigos problemas de congelamento de mouse em múltiplos monitores [32, Chat History].
+## 🚀 6. Decisão Atual: openSUSE Leap para casa e Fedora para laboratório
+A configuração doméstica atual ficou no **openSUSE Leap 16.0**, enquanto o ambiente de trabalho continua sendo usado como laboratório de testes e experimentação. Essa divisão deixa a máquina de casa estável e de manutenção simples, e o Acer Nitro como palco para explorar novas versões, drivers e ferramentas mais agressivas.
+*   **Por que openSUSE?** Oferece estabilidade, manutenção direta e uma base confiável para o uso diário, sem o excesso de camadas e a instabilidade associada a sistemas mais experimentais.
+*   **Por que manter o Acer como laboratório?** O hardware do Nitro continua sendo a plataforma ideal para validar Fedora, GNOME e fluxos mais modernos de drivers e multi-monitor.
 
 ---
 

@@ -9,7 +9,12 @@ Este repositório reúne scripts e rotinas de pós-instalação organizados por 
 - [fedora_44](fedora_44/) — Fedora 44
 - [zorin_os_pro_18_1](zorin_os_pro_18_1/) — Zorin OS Pro 18.1
 - [opensuse_leap_16_0](opensuse_leap_16_0/) — openSUSE Leap 16.0
-- [current-config](current-config/)
+- [current-config](current-config/) — configuração ativa dos hosts em uso
+
+## Configuração atual
+
+- [current-config/casa-lenovo.md](current-config/casa-lenovo.md) — Lenovo IdeaPad 1 com openSUSE Leap 16.0
+- [current-config/trabalho-acer.md](current-config/trabalho-acer.md) — Acer Nitro em uso como laboratório de testes e experimentação
 
 ## Convenção de nomes
 
@@ -57,7 +62,7 @@ sudo ./nome-do-script.sh
 - [x] Zorin OS Pro
 - [x] Fedora
 - [x] Debian/Ubuntu
-- [ ] OpenSUSE (em expansão)
+- [x] OpenSUSE Leap 16.0
 
 ---
 
