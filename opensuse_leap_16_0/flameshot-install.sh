@@ -1,16 +1,5 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#Usar este comando para iniciar Flameshot em modo GUI com suporte para Wayland:
+#Gnome keybinding
+#Para usar este comando como atalho no Gnome, vá em Configurações -> Teclado -> Atalhos -> Personalizados e adicione um novo atalho com o comando abaixo.
 
-echo "[1/2] Instalando Flameshot no OpenSUSE..."
-sudo zypper install -y flameshot
-
-mkdir -p "$HOME/.local/bin"
-cat <<'EOF' > "$HOME/.local/bin/flameshot-gui"
-#!/usr/bin/env bash
-export QT_QPA_PLATFORM=wayland
-exec flameshot gui
-EOF
-chmod +x "$HOME/.local/bin/flameshot-gui"
-
-echo "[2/2] Flameshot instalado com sucesso."
-echo "Use: ~/.local/bin/flameshot-gui"
+bash -c "nohup env XDG_SESSION_TYPE=lxqt QT_QPA_PLATFORM=wayland /usr/bin/flameshot gui > /dev/null 2>&1 &"
