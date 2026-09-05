@@ -7,13 +7,14 @@ Este repositório reúne scripts e rotinas de pós-instalação organizados por 
 
 - [debian_trixie](debian_trixie/) — Debian Trixie
 - [fedora_44](fedora_44/) — Fedora 44
+- [linux_mint_22_3](linux_mint_22_3/) — Linux Mint 22.3
 - [zorin_os_pro_18_1](zorin_os_pro_18_1/) — Zorin OS Pro 18.1
 - [opensuse_leap_16_0](opensuse_leap_16_0/) — openSUSE Leap 16.0
 - [current-config](current-config/) — configuração ativa dos hosts em uso
 
 ## Configuração atual
 
-- [current-config/casa-lenovo.md](current-config/casa-lenovo.md) — Lenovo IdeaPad 1 com openSUSE Leap 16.0
+- [current-config/casa-lenovo.md](current-config/casa-lenovo.md) — Lenovo IdeaPad 1 com Linux Mint 22.3
 - [current-config/trabalho-acer.md](current-config/trabalho-acer.md) — Acer Nitro usado como máquina de trabalho profissional e gestão de produtos
 
 ## Convenção de nomes
@@ -29,6 +30,7 @@ Este repositório reúne scripts e rotinas de pós-instalação organizados por 
 |---|---|---|
 | [debian_trixie](debian_trixie/) | Debian Trixie | Debian 13 / Trixie |
 | [fedora_44](fedora_44/) | Fedora 44 | Fedora 44 |
+| [linux_mint_22_3](linux_mint_22_3/) | Linux Mint 22.3 | Linux Mint 22.3 / Ubuntu 24.04 Noble |
 | [zorin_os_pro_18_1](zorin_os_pro_18_1/) | Zorin OS Pro 18.1 | Zorin OS Pro 18.1 |
 | [opensuse_leap_16_0](opensuse_leap_16_0/) | openSUSE Leap 16.0 | openSUSE Leap 16.0 |
 
@@ -73,6 +75,20 @@ Este repositório reúne scripts e rotinas de pós-instalação organizados por 
 - `plex-firewall-config.sh` — ajusta firewall para o Plex.
 - `swap-config.sh` — configura swap do sistema.
 - `transmission-config.sh` — instala e ajusta o Transmission.
+
+### [linux_mint_22_3](linux_mint_22_3/)
+- `samba-config.sh` — instala Samba e configura acesso público por guest.
+- `samba-share.sh` — cria um compartilhamento SMB público.
+- `flatpak-install.sh` — instala Flatpak e apps do desktop.
+- `ftp-setup.sh` — prepara um FTP local com credencial definida na execução.
+- `signal-install.sh` — instala o Signal Desktop.
+- `flameshot-install.sh` — instala o Flameshot.
+- `nfs-client.sh` — configura pontos de montagem NFS.
+- `nfs-server.sh` — habilita um servidor NFS local.
+- `nvidia-install.sh` — instala o driver NVIDIA recomendado pela distribuição.
+- `plex-firewall-config.sh` — ajusta portas do Plex no firewall.
+- `swap-config.sh` — configura swap do sistema.
+- `transmission-config.sh` — prepara o Transmission para uso na rede local.
 
 ### [opensuse_leap_16_0](opensuse_leap_16_0/)
 - `samba-config.sh` — instala Samba e configura compartilhamento público no openSUSE.
