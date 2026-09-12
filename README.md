@@ -14,8 +14,8 @@ Este repositório reúne scripts e rotinas de pós-instalação organizados por 
 
 ## Configuração atual
 
-- [current-config/casa-lenovo.md](current-config/casa-lenovo.md) — Lenovo IdeaPad 1 com Linux Mint 22.3
-- [current-config/trabalho-acer.md](current-config/trabalho-acer.md) — Acer Nitro usado como máquina de trabalho profissional e gestão de produtos
+- [current-config/casa-lenovo.md](current-config/casa-lenovo.md) — Lenovo IdeaPad 1 com Debian 13 (Trixie)
+- [current-config/trabalho-acer.md](current-config/trabalho-acer.md) — Acer Nitro com Zorin OS 18.1, usado como máquina de trabalho profissional e gestão de produtos
 
 ## Convenção de nomes
 
@@ -122,7 +122,8 @@ sudo ./nome-do-script.sh
 
 - [x] Zorin OS Pro
 - [x] Fedora
-- [x] Debian/Ubuntu
+- [x] Debian 13 / Trixie
+- [x] Ubuntu
 - [x] OpenSUSE Leap 16.0
 
 ---
