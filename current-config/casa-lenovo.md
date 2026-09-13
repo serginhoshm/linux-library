@@ -50,4 +50,4 @@ Info:
 - Nenhum firewall gerenciado por UFW ou firewalld instalado.
 - Nenhum servidor Samba, NFS ou FTP instalado ou habilitado.
 - Transmission, Flameshot e Signal não instalados.
-- Opcionais conforme necessidade: scripts disponíveis em `debian_trixie/`.
+- Opcionais conforme necessidade: menu disponível em `linux-setup.sh`.

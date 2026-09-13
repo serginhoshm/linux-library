@@ -1,131 +1,108 @@
-# linux-kb
-# 🗺️ Logbook para distros Linux
+# linux-library
 
-Este repositório reúne scripts e rotinas de pós-instalação organizados por distribuição. A ideia é manter cada ambiente separado e pronto para reutilização em novas instalações.
+Biblioteca interativa e idempotente para pós-instalação Linux. O ponto de entrada único detecta automaticamente sistemas baseados em APT, DNF ou Zypper e apresenta somente ações compatíveis.
 
 ## Estrutura
 
-- [debian_trixie](debian_trixie/) — Debian Trixie
-- [fedora_44](fedora_44/) — Fedora 44
-- [linux_mint_22_3](linux_mint_22_3/) — Linux Mint 22.3
-- [zorin_os_pro_18_1](zorin_os_pro_18_1/) — Zorin OS Pro 18.1
-- [opensuse_leap_16_0](opensuse_leap_16_0/) — openSUSE Leap 16.0
-- [current-config](current-config/) — configuração ativa dos hosts em uso
+- [linux-setup.sh](linux-setup.sh) — instalações e configurações do sistema.
+- [flatpak-apps.md](flatpak-apps.md) — catálogo editável de aplicativos Flatpak.
+- `deb/` — pacotes locais para sistemas APT.
+- `rpm/` — pacotes locais para sistemas DNF ou Zypper.
+- [current-config](current-config/) — inventário dos hosts em uso e histórico técnico.
+
+As pastas `deb/` e `rpm/` são criadas pelo script quando necessário. Seus pacotes são ignorados pelo Git; apenas os arquivos `.gitkeep` que preservam as pastas são versionados.
 
 ## Configuração atual
 
 - [current-config/casa-lenovo.md](current-config/casa-lenovo.md) — Lenovo IdeaPad 1 com Debian 13 (Trixie)
 - [current-config/trabalho-acer.md](current-config/trabalho-acer.md) — Acer Nitro com Zorin OS 18.1, usado como máquina de trabalho profissional e gestão de produtos
 
-## Convenção de nomes
+## Compatibilidade
 
-- Os scripts seguem o padrão `ferramenta-acao.sh`.
-- A referência à distro foi removida do nome do arquivo.
-- Cada pasta representa uma distribuição e versão compatíveis.
-- A pasta raiz serve como índice geral e documentação.
-
-## Compatibilidade por versão
-
-| Pasta | Distribuição e versão | Compatível com |
+| Família | Distribuições cobertas | Pacotes locais |
 |---|---|---|
-| [debian_trixie](debian_trixie/) | Debian Trixie | Debian 13 / Trixie |
-| [fedora_44](fedora_44/) | Fedora 44 | Fedora 44 |
-| [linux_mint_22_3](linux_mint_22_3/) | Linux Mint 22.3 | Linux Mint 22.3 / Ubuntu 24.04 Noble |
-| [zorin_os_pro_18_1](zorin_os_pro_18_1/) | Zorin OS Pro 18.1 | Zorin OS Pro 18.1 |
-| [opensuse_leap_16_0](opensuse_leap_16_0/) | openSUSE Leap 16.0 | openSUSE Leap 16.0 |
+| APT | Debian, Ubuntu, Linux Mint e Zorin OS | `.deb` |
+| DNF | Fedora e derivados | `.rpm` |
+| Zypper | openSUSE e derivados | `.rpm` |
 
-## Índice por distro
+Outras famílias encerram a execução antes de qualquer alteração.
 
-### [debian_trixie](debian_trixie/)
-- `samba-config.sh` — configura compartilhamento Samba público com guest access, permissões e firewall.
-- `flatpak-install.sh` — prepara Flatpak e aplicações essenciais.
-- `ftp-setup.sh` — monta um servidor FTP local para transferência simples.
-- `signal-install.sh` — instala o Signal Desktop.
-- `flameshot-install.sh` — habilita captura de tela rápida e eficiente.
-- `nfs-client.sh` — conecta a volumes remotos via NFS.
-- `nfs-server.sh` — disponibiliza um servidor NFS local.
-- `plex-firewall-config.sh` — abre portas necessárias para o Plex.
-- `swap-config.sh` — ajusta área de swap do sistema.
-- `transmission-config.sh` — prepara um cliente de torrents leve.
+As configurações de serviços requerem `systemd`. O script usa Bash 4.3 ou mais recente por depender de arrays associativos e referências de variáveis.
 
-### [fedora_44](fedora_44/)
-- `samba-config.sh` — configura Samba público com mapeamento de guest e validação do smb.conf.
-- `samba-share.sh` — cria um diretório compartilhado para uso local em rede.
-- `flatpak-install.sh` — instala Flatpak e utilitários gerais.
-- `ftp-setup.sh` — configura um servidor FTP local.
-- `signal-install.sh` — instala o Signal Desktop.
-- `flameshot-install.sh` — instala o Flameshot.
-- `nfs-client.sh` — configura montagem de volumes NFS do cliente.
-- `nfs-server.sh` — habilita um servidor NFS local.
-- `nvidia-install.sh` — instala drivers NVIDIA e ajustes do sistema.
-- `plex-firewall-config.sh` — abre portas do Plex no firewall.
-- `swap-config.sh` — cria ou ajusta swap no Fedora.
-- `transmission-config.sh` — prepara o Transmission para downloads via torrent.
+## Menu
 
-### [zorin_os_pro_18_1](zorin_os_pro_18_1/)
-- `samba-config.sh` — instala Samba e configura acesso público por guest.
-- `samba-share.sh` — cria um compartilhamento SMB público.
-- `flatpak-install.sh` — instala Flatpak e apps do desktop.
-- `ftp-setup.sh` — prepara um FTP local para uso básico.
-- `signal-install.sh` — instala o Signal Desktop.
-- `flameshot-install.sh` — instala o Flameshot.
-- `nfs-client.sh` — configura ponto de montagem NFS.
-- `nfs-server.sh` — habilita servidor NFS local.
-- `nvidia-install.sh` — instala drivers NVIDIA para desktop.
-- `plex-firewall-config.sh` — ajusta firewall para o Plex.
-- `swap-config.sh` — configura swap do sistema.
-- `transmission-config.sh` — instala e ajusta o Transmission.
+1. **Configurações**
+   - Samba guest share
+   - Servidor FTP
+   - Cliente e servidor NFS
+   - Transmission daemon e Web UI
+   - Portas do Plex
+   - Swapfile e zram
+   - Flameshot com integração Wayland
+2. **Instalações Flatpak**
+   - Checklist carregado de [flatpak-apps.md](flatpak-apps.md).
+   - Itens já instalados aparecem com `[i]` e não são reinstalados.
+3. **Pacotes locais**
+   - Em sistemas APT, apresenta os arquivos da pasta `deb/`.
+   - Em sistemas DNF ou Zypper, apresenta os arquivos da pasta `rpm/`.
+   - Formatos incompatíveis e arquivos inválidos são ignorados.
+   - A ferramenta nativa resolve as dependências disponíveis nos repositórios.
+4. **Sair**
 
-### [linux_mint_22_3](linux_mint_22_3/)
-- `samba-config.sh` — instala Samba e configura acesso público por guest.
-- `samba-share.sh` — cria um compartilhamento SMB público.
-- `flatpak-install.sh` — instala Flatpak e apps do desktop.
-- `ftp-setup.sh` — prepara um FTP local com credencial definida na execução.
-- `signal-install.sh` — instala o Signal Desktop.
-- `flameshot-install.sh` — instala o Flameshot.
-- `nfs-client.sh` — configura pontos de montagem NFS.
-- `nfs-server.sh` — habilita um servidor NFS local.
-- `nvidia-install.sh` — instala o driver NVIDIA recomendado pela distribuição.
-- `plex-firewall-config.sh` — ajusta portas do Plex no firewall.
-- `swap-config.sh` — configura swap do sistema.
-- `transmission-config.sh` — prepara o Transmission para uso na rede local.
-
-### [opensuse_leap_16_0](opensuse_leap_16_0/)
-- `samba-config.sh` — instala Samba e configura compartilhamento público no openSUSE.
-- `flatpak-install.sh` — instala Flatpak e utilitários relevantes.
-- `ftp-setup.sh` — configura FTP e permissões locais.
-- `signal-install.sh` — instala o Signal Desktop.
-- `flameshot-install.sh` — instala o Flameshot.
-- `nfs-client.sh` — configura cliente NFS em rede local.
-- `nfs-server.sh` — habilita servidor NFS local.
-- `plex-firewall-config.sh` — ajusta portas e firewall do Plex.
-- `swap-config.sh` — cria swap para a base openSUSE.
-- `transmission-config.sh` — prepara o Transmission para downloads.
+Nos checklists, informe um ou mais números para alternar a seleção. Use `a` para selecionar todos, `n` para limpar, `c` para continuar e `q` para cancelar.
 
 ## Como usar
 
-1. Entre na pasta da sua distro.
-2. Escolha o script desejado.
-3. Dê permissão de execução:
+O script deve ser iniciado como usuário normal. Ele solicita `sudo` somente quando uma ação precisa alterar o sistema.
 
 ```bash
-chmod +x nome-do-script.sh
+./linux-setup.sh
 ```
 
-4. Execute com sudo quando necessário:
+Para revisar comandos e navegar nos menus sem aplicar alterações:
 
 ```bash
-sudo ./nome-do-script.sh
+./linux-setup.sh --dry-run
 ```
 
-## Histórico
+O Flatpak é configurado no escopo do sistema. Metadados dos repositórios são atualizados no máximo uma vez por execução.
+
+Para instalar pacotes locais, coloque os arquivos na pasta correspondente antes de abrir a opção 3:
+
+```text
+deb/aplicativo.deb
+rpm/aplicativo.rpm
+```
+
+Esses arquivos permanecem somente na máquina local e não aparecem no Git.
+
+## Catálogo Flatpak
+
+O catálogo precisa permanecer na mesma pasta de `linux-setup.sh`. Para adicionar, remover ou renomear uma opção, edite a tabela em [flatpak-apps.md](flatpak-apps.md). Cada linha precisa manter este formato:
+
+```markdown
+| `org.example.Application` | Nome exibido | Descrição curta |
+```
+
+O script ignora o cabeçalho da tabela, valida o formato dos IDs e interrompe a execução se encontrar IDs duplicados ou um catálogo vazio.
+
+## Idempotência e segurança
+
+- Pacotes e Flatpaks já instalados são detectados antes da instalação.
+- Arquivos gerenciados só são substituídos quando o conteúdo muda.
+- O script cria um backup `.linux-setup.bak` antes da primeira alteração de cada configuração existente.
+- Entradas de NFS e swap não são duplicadas no `/etc/fstab`.
+- Dispositivos zram ativos nunca são desativados ou recriados durante a execução.
+- Senhas FTP não são armazenadas pelo script.
+
+Samba guest, FTP, NFS e o RPC do Transmission preservam os padrões permissivos da biblioteca anterior. Use essas opções somente em uma rede doméstica confiável e leia o aviso exibido antes da confirmação.
+
+Signal está disponível via Flatpak. Instalação nativa do Signal e drivers NVIDIA/RPM Fusion não fazem parte do script unificado.
+
+## Sistemas registrados
 
 - [x] Zorin OS Pro
 - [x] Fedora
 - [x] Debian 13 / Trixie
 - [x] Ubuntu
 - [x] OpenSUSE Leap 16.0
-
----
-
-*“Linux é uma aventura de distribuição em distribuição.”* 🐧

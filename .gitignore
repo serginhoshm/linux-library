@@ -1,0 +1,4 @@
+deb/*
+rpm/*
+!deb/.gitkeep
+!rpm/.gitkeep
