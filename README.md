@@ -39,6 +39,7 @@ As configurações de serviços requerem `systemd`. O script usa Bash 4.3 ou mai
    - Portas do Plex
    - Swapfile e zram
    - Flameshot com integração Wayland
+   - Boot com splash em sistemas APT
 2. **Instalações Flatpak**
    - Checklist carregado de [flatpak-apps.md](flatpak-apps.md).
    - Itens já instalados aparecem com `[i]` e não são reinstalados.
@@ -66,6 +67,14 @@ Para revisar comandos e navegar nos menus sem aplicar alterações:
 ```
 
 O Flatpak é configurado no escopo do sistema. Metadados dos repositórios são atualizados no máximo uma vez por execução.
+
+### Boot com splash
+
+Em sistemas APT, o menu **Configurações > Boot com splash** mostra o estado do GRUB, do boot atual, do Plymouth, do tema, do driver KMS e do initramfs. A opção pode ativar ou desativar o parâmetro `splash` para o próximo boot.
+
+Se o Plymouth não estiver instalado durante a ativação, a ferramenta pede confirmação antes de instalar o pacote. A desativação remove somente o parâmetro `splash`: preserva `quiet`, os demais argumentos do kernel, temas e pacotes instalados.
+
+A configuração é mantida em `/etc/default/grub.d/99-linux-setup-splash.cfg`; o `/boot/grub/grub.cfg` é regenerado somente quando o estado muda. Reinicie o sistema para observar o resultado.
 
 Para instalar pacotes locais, coloque os arquivos na pasta correspondente antes de abrir a opção 3:
 

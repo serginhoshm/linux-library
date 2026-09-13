@@ -7,6 +7,12 @@ readonly SCRIPT_DIR
 readonly FLATPAK_CATALOG="$SCRIPT_DIR/flatpak-apps.md"
 readonly DEB_DIR="$SCRIPT_DIR/deb"
 readonly RPM_DIR="$SCRIPT_DIR/rpm"
+readonly GRUB_DEFAULT_FILE="${LINUX_SETUP_GRUB_DEFAULT_FILE:-/etc/default/grub}"
+readonly GRUB_DROPIN_DIR="${LINUX_SETUP_GRUB_DROPIN_DIR:-/etc/default/grub.d}"
+readonly GRUB_SPLASH_DROPIN="$GRUB_DROPIN_DIR/99-linux-setup-splash.cfg"
+readonly GRUB_CONFIG_FILE="${LINUX_SETUP_GRUB_CONFIG_FILE:-/boot/grub/grub.cfg}"
+readonly UPDATE_GRUB_COMMAND="${LINUX_SETUP_UPDATE_GRUB_COMMAND:-/usr/sbin/update-grub}"
+readonly UPDATE_INITRAMFS_COMMAND="${LINUX_SETUP_UPDATE_INITRAMFS_COMMAND:-/usr/sbin/update-initramfs}"
 DRY_RUN="${LINUX_SETUP_DRY_RUN:-0}"
 TEST_PACKAGE_FAMILY="${LINUX_SETUP_TEST_FAMILY:-}"
 WORK_DIR=""
@@ -231,6 +237,210 @@ backup_file_once() {
   else
     run_as_root cp -a -- "$target" "$backup"
   fi
+}
+
+boot_splash_dropin_content() {
+  local state="$1"
+
+  cat <<EOF
+# Managed by Linux Setup. Local boot arguments remain in their original files.
+linux_setup_cmdline=""
+for linux_setup_argument in \${GRUB_CMDLINE_LINUX_DEFAULT:-}; do
+  [ "\$linux_setup_argument" = "splash" ] && continue
+  linux_setup_cmdline="\${linux_setup_cmdline}\${linux_setup_cmdline:+ }\${linux_setup_argument}"
+done
+EOF
+  if [[ "$state" == "enabled" ]]; then
+    cat <<'EOF'
+GRUB_CMDLINE_LINUX_DEFAULT="${linux_setup_cmdline}${linux_setup_cmdline:+ }splash"
+EOF
+  else
+    cat <<'EOF'
+GRUB_CMDLINE_LINUX_DEFAULT="$linux_setup_cmdline"
+EOF
+  fi
+  cat <<'EOF'
+unset linux_setup_argument linux_setup_cmdline
+EOF
+}
+
+grub_default_cmdline() {
+  local shell_code
+
+  [[ -r "$GRUB_DEFAULT_FILE" ]] || return 1
+  shell_code="set -a; . \"$GRUB_DEFAULT_FILE\""
+  if [[ -d "$GRUB_DROPIN_DIR" ]]; then
+    shell_code+='; for config in "'"$GRUB_DROPIN_DIR"'"/*.cfg; do [[ -e "$config" ]] && . "$config"; done'
+  fi
+  shell_code+='; printf "%s\\n" "${GRUB_CMDLINE_LINUX_DEFAULT:-}"'
+  bash -c "$shell_code"
+}
+
+cmdline_has_argument() {
+  local cmdline="$1"
+  local expected="$2"
+  local argument
+
+  for argument in $cmdline; do
+    [[ "$argument" == "$expected" ]] && return 0
+  done
+  return 1
+}
+
+plymouth_initramfs_ready() {
+  local initramfs="/boot/initrd.img-$(uname -r)"
+  local contents
+
+  [[ -r "$initramfs" ]] || return 1
+  command -v lsinitramfs >/dev/null 2>&1 || return 1
+  contents="$(lsinitramfs "$initramfs" 2>/dev/null)" || return 1
+  grep -q '/plymouthd$' <<< "$contents" &&
+    grep -q '/plymouth/renderers/drm.so$' <<< "$contents"
+}
+
+boot_splash_theme() {
+  local file theme
+
+  for file in /etc/plymouth/plymouthd.conf /usr/share/plymouth/plymouthd.defaults; do
+    [[ -r "$file" ]] || continue
+    theme="$(awk -F= '/^[[:space:]]*Theme=/{print $2; exit}' "$file")"
+    [[ -z "$theme" ]] || { printf '%s\n' "$theme"; return 0; }
+  done
+  printf '%s\n' "nao detectado"
+}
+
+boot_splash_kms_driver() {
+  local path driver
+
+  for path in /sys/class/drm/card*/device/driver/module; do
+    [[ -e "$path" ]] || continue
+    driver="$(basename "$(readlink -f "$path")")"
+    [[ -z "$driver" ]] || { printf '%s\n' "$driver"; return 0; }
+  done
+  printf '%s\n' "nao detectado"
+}
+
+show_boot_splash_status() {
+  local configured_cmdline current_cmdline
+
+  configured_cmdline="$(grub_default_cmdline 2>/dev/null || true)"
+  current_cmdline="$(< /proc/cmdline)"
+  printf 'GRUB configurado: %s\n' "${configured_cmdline:-sem argumentos padrao}"
+  if cmdline_has_argument "$current_cmdline" splash; then
+    printf 'Boot atual: splash ativo\n'
+  else
+    printf 'Boot atual: splash inativo\n'
+  fi
+  if is_native_package_installed plymouth; then
+    printf 'Plymouth: instalado | Tema: %s\n' "$(boot_splash_theme)"
+  else
+    printf 'Plymouth: nao instalado\n'
+  fi
+  printf 'Driver KMS: %s\n' "$(boot_splash_kms_driver)"
+  if plymouth_initramfs_ready; then
+    printf 'Initramfs: Plymouth e renderer DRM presentes\n'
+  else
+    printf 'Initramfs: Plymouth ou renderer DRM nao detectado\n'
+  fi
+}
+
+validate_boot_splash_prerequisites() {
+  [[ "$PACKAGE_FAMILY" == "apt" ]] || { warn "Boot com splash esta disponivel somente em sistemas APT."; return 1; }
+  [[ -r "$GRUB_DEFAULT_FILE" ]] || { warn "Configuracao do GRUB nao encontrada: $GRUB_DEFAULT_FILE"; return 1; }
+  [[ -x "$UPDATE_GRUB_COMMAND" ]] || { warn "Comando update-grub nao encontrado: $UPDATE_GRUB_COMMAND"; return 1; }
+}
+
+validate_generated_grub() {
+  local state="$1"
+  local cmdline
+
+  [[ "$DRY_RUN" == "1" ]] && return 0
+  [[ -e "$GRUB_CONFIG_FILE" ]] || { warn "Configuracao gerada nao encontrada: $GRUB_CONFIG_FILE"; return 1; }
+  cmdline="$(run_as_root awk '/^[[:space:]]*linux[[:space:]]/{print; exit}' "$GRUB_CONFIG_FILE")"
+  if [[ "$state" == "enabled" ]]; then
+    cmdline_has_argument "$cmdline" splash || { warn "O GRUB gerado nao contem splash."; return 1; }
+  elif cmdline_has_argument "$cmdline" splash; then
+    warn "O GRUB gerado ainda contem splash. Verifique configuracoes posteriores ao drop-in."
+    return 1
+  fi
+  if command -v grub-script-check >/dev/null 2>&1; then
+    run_as_root grub-script-check "$GRUB_CONFIG_FILE"
+  fi
+}
+
+write_boot_splash_state() {
+  local state="$1"
+
+  if install_managed_file "$GRUB_SPLASH_DROPIN" 0644 < <(boot_splash_dropin_content "$state"); then
+    run_as_root "$UPDATE_GRUB_COMMAND"
+    validate_generated_grub "$state"
+  else
+    info "Boot com splash ja esta $([[ "$state" == "enabled" ]] && printf 'ativado' || printf 'desativado')."
+  fi
+}
+
+enable_boot_splash() {
+  local configured_cmdline
+
+  validate_boot_splash_prerequisites || return 1
+  if ! is_native_package_installed plymouth; then
+    confirm "Plymouth nao esta instalado. Instalar agora?" || { info "Ativacao cancelada."; return 0; }
+    install_native_packages plymouth
+  fi
+  if ! plymouth_initramfs_ready; then
+    [[ -x "$UPDATE_INITRAMFS_COMMAND" ]] || { warn "Comando update-initramfs nao encontrado: $UPDATE_INITRAMFS_COMMAND"; return 1; }
+    run_as_root "$UPDATE_INITRAMFS_COMMAND" -u
+  fi
+  configured_cmdline="$(grub_default_cmdline)" || return 1
+  if cmdline_has_argument "$configured_cmdline" splash; then
+    info "Boot com splash ja esta ativado."
+    return 0
+  fi
+  write_boot_splash_state enabled || return 1
+  info "Splash ativado para o proximo boot."
+}
+
+disable_boot_splash() {
+  local configured_cmdline
+
+  validate_boot_splash_prerequisites || return 1
+  configured_cmdline="$(grub_default_cmdline)" || return 1
+  if ! cmdline_has_argument "$configured_cmdline" splash; then
+    info "Boot com splash ja esta desativado; nenhum pacote foi removido."
+    return 0
+  fi
+  write_boot_splash_state disabled || return 1
+  info "Splash desativado para o proximo boot; nenhum pacote foi removido."
+}
+
+boot_splash_menu() {
+  local option
+
+  while true; do
+    print_header
+    printf 'Boot com splash\n\n'
+    show_boot_splash_status
+    printf '\n1. Ativar splash\n'
+    printf '2. Desativar splash\n'
+    printf '0. Voltar\n\n'
+    read -r -p "> " option
+    case "$option" in
+      1)
+        if confirm "Ativar o splash no proximo boot?"; then
+          enable_boot_splash || true
+        fi
+        pause
+        ;;
+      2)
+        if confirm "Desativar somente o splash, sem remover pacotes?"; then
+          disable_boot_splash || true
+        fi
+        pause
+        ;;
+      0) return 0 ;;
+      *) warn "Opcao invalida."; pause ;;
+    esac
+  done
 }
 
 root_filesystem_type() {
@@ -1235,6 +1445,7 @@ configuration_menu() {
     printf '7. Swapfile\n'
     printf '8. Zram persistente\n'
     printf '9. Flameshot com integracao Wayland\n'
+    [[ "$PACKAGE_FAMILY" == "apt" ]] && printf '10. Boot com splash\n'
     printf '0. Voltar\n\n'
     read -r -p "> " option
     case "$option" in
@@ -1247,6 +1458,14 @@ configuration_menu() {
       7) configure_swapfile || true; pause ;;
       8) configure_zram || true; pause ;;
       9) if confirm "Instalar e configurar Flameshot?"; then flameshot_configuration || true; fi; pause ;;
+      10)
+        if [[ "$PACKAGE_FAMILY" == "apt" ]]; then
+          boot_splash_menu
+        else
+          warn "Opcao invalida."
+          pause
+        fi
+        ;;
       0) return 0 ;;
       *) warn "Opcao invalida."; pause ;;
     esac
