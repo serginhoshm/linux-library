@@ -116,6 +116,17 @@ download_native_package chromium
 NATIVE_RESOLUTION_METHOD=""
 NATIVE_EXPECTED_SHA256=""
 
+printf '!<arch>\n' > "$DEB_DIR/chromium_1.0_amd64.deb"
+: > "$HTTP_LOG"
+NATIVE_RESOLUTION_METHOD=catalog
+NATIVE_DOWNLOAD_URL='https://example.test/chromium_1.0_amd64.deb'
+NATIVE_RESOLUTION_VERSION=""
+download_resolved_cache_asset chromium apt
+[[ "$NATIVE_CACHE_PATH" == "$DEB_DIR/chromium_1.0_amd64.deb" ]] || fail "cache sem checksum nao foi reutilizado"
+[[ ! -s "$HTTP_LOG" ]] || fail "cache sem checksum nao pode acessar a rede"
+NATIVE_RESOLUTION_METHOD=""
+NATIVE_RESOLUTION_VERSION=""
+
 touch "$RPM_DIR/flatseal-0.9.x86_64.rpm"
 PACKAGE_FAMILY=dnf
 download_native_package flatseal

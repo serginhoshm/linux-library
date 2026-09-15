@@ -113,7 +113,7 @@ Use valores vazios quando uma família não tiver candidato. **Atualizar catálo
 
 Ao preparar o cache, o motor consulta o nome da família atual e aliases exatos nos metadados do APT, DNF ou Zypper. Também consulta a fonte externa separadamente para DEB e RPM; GitHub aceita `GITHUB_TOKEN` opcional para ampliar o limite da API. A ausência de um formato é registrada sem impedir que o outro seja armazenado.
 
-Downloads externos usam HTTPS, timeout e tentativas limitadas. SHA-256 oficial é verificado quando publicado. Na família atual, nome e arquitetura são validados pelos metadados internos do pacote; na família oposta, o arquivo precisa ter a assinatura estrutural DEB/RPM e será validado integralmente quando instalado em uma distribuição compatível. Um pacote externo em cache só é reutilizado quando o checksum oficial atual o confirma. Sem checksum, uma nova cópia é baixada.
+Downloads externos usam HTTPS, timeout e tentativas limitadas. SHA-256 oficial é verificado quando publicado. Antes de baixar, o cache procura o arquivo correspondente ao link resolvido e valida sua assinatura DEB/RPM, nome e arquitetura; quando a versão está disponível no catálogo, ela também precisa coincidir. Com checksum publicado, o checksum é verificado adicionalmente. Assim, fontes sem checksum também reutilizam o pacote já cacheado enquanto URL e versão permanecerem compatíveis.
 
 Antes da instalação, o script fotografa os arquivos de fontes e chaves da família. Depois, remove somente arquivos novos cujo nome ou conteúdo corresponda ao aplicativo, pacote ou host da origem, atualiza os metadados e preserva tudo que já existia. Uma transação interrompida é reconciliada na próxima execução.
 

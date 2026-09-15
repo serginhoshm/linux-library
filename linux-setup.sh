@@ -647,6 +647,35 @@ find_verified_cached_package() {
   return 1
 }
 
+find_catalog_cached_package() {
+  local directory="$1"
+  local extension="$2"
+  local expected_package="$3"
+  local expected_path="$4"
+  local expected_version="$5"
+  local checksum_url="$6"
+  local path metadata cached_version
+
+  while IFS= read -r -d '' path; do
+    [[ "$path" == "$expected_path" ]] || continue
+    package_file_has_format "$path" "$PACKAGE_FAMILY" || continue
+    if command -v dpkg-deb >/dev/null 2>&1 || command -v rpm >/dev/null 2>&1; then
+      native_package_is_compatible "$path" "$expected_package" || continue
+    fi
+    if [[ -n "$expected_version" ]]; then
+      metadata="$(package_file_metadata "$path")" || continue
+      cached_version="${metadata#* }"
+      [[ -n "$cached_version" && "$cached_version" == "$expected_version" ]] || continue
+    fi
+    if [[ -n "$NATIVE_EXPECTED_SHA256" || -n "$checksum_url" ]]; then
+      verify_download_checksum "$path" "$checksum_url" || continue
+    fi
+    NATIVE_CACHE_PATH="$path"
+    return 0
+  done < <(find "$directory" -maxdepth 1 -type f -iname "*.${extension}" -print0)
+  return 1
+}
+
 run_in_directory() {
   local directory="$1"
   shift
@@ -820,11 +849,9 @@ download_resolved_cache_asset() {
   fi
 
   mkdir -p -- "$directory"
-  if [[ -f "$destination" ]] &&
-    [[ -n "$NATIVE_EXPECTED_SHA256" || -n "$NATIVE_CHECKSUM_URL" ]] &&
-    verify_download_checksum "$destination" "$NATIVE_CHECKSUM_URL" &&
-    package_file_has_format "$destination" "$target_family"; then
-    info "Cache $target_family ja esta atualizado: $destination"
+  if find_catalog_cached_package "$directory" "$extension" "$package" "$destination" \
+    "$NATIVE_RESOLUTION_VERSION" "$NATIVE_CHECKSUM_URL"; then
+    info "Reutilizando pacote do cache $target_family: $NATIVE_CACHE_PATH"
     return 0
   fi
   temporary="$(mktemp "$WORK_DIR/cache.XXXXXX")"
