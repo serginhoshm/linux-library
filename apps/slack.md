@@ -23,12 +23,12 @@ Comunicacao de equipes
       "source": "https://slack.com/downloads/instructions/linux?ddl=1&build=deb"
     },
     "resolved": {
-      "url": "",
+      "url": "https://downloads.slack-edge.com/desktop-releases/linux/x64/4.52.155/slack-desktop-4.52.155-amd64.deb",
       "version": "",
       "sha256": "",
       "checksum_url": "",
-      "checked_at": "",
-      "status": "UNKNOWN"
+      "checked_at": "2026-09-15T11:24:21Z",
+      "status": "FOUND"
     }
   },
   "rpm": {
@@ -41,8 +41,8 @@ Comunicacao de equipes
       "version": "",
       "sha256": "",
       "checksum_url": "",
-      "checked_at": "",
-      "status": "UNKNOWN"
+      "checked_at": "2026-09-15T11:24:21Z",
+      "status": "NOT_FOUND"
     }
   },
   "flatpak": {
