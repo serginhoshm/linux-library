@@ -4,9 +4,17 @@ set -Eeuo pipefail
 readonly SCRIPT_NAME="Linux Setup"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly SCRIPT_DIR
-readonly FLATPAK_CATALOG="$SCRIPT_DIR/flatpak-apps.md"
-readonly DEB_DIR="$SCRIPT_DIR/deb"
-readonly RPM_DIR="$SCRIPT_DIR/rpm"
+readonly APP_LIBRARY="${LINUX_SETUP_APP_LIBRARY:-$SCRIPT_DIR/apps}"
+readonly CATALOG_TOOL="$SCRIPT_DIR/catalog-tool.py"
+readonly DEB_DIR="${LINUX_SETUP_DEB_DIR:-$SCRIPT_DIR/deb}"
+readonly RPM_DIR="${LINUX_SETUP_RPM_DIR:-$SCRIPT_DIR/rpm}"
+readonly LOG_DIR="${LINUX_SETUP_LOG_DIR:-$SCRIPT_DIR/logs}"
+readonly STATE_DIR="${LINUX_SETUP_STATE_DIR:-$SCRIPT_DIR/.linux-setup-state}"
+readonly APT_SOURCE_DIR="${LINUX_SETUP_APT_SOURCE_DIR:-/etc/apt/sources.list.d}"
+readonly APT_KEYRING_DIR="${LINUX_SETUP_APT_KEYRING_DIR:-/etc/apt/keyrings}"
+readonly APT_SHARED_KEYRING_DIR="${LINUX_SETUP_APT_SHARED_KEYRING_DIR:-/usr/share/keyrings}"
+readonly DNF_REPO_DIR="${LINUX_SETUP_DNF_REPO_DIR:-/etc/yum.repos.d}"
+readonly ZYPPER_REPO_DIR="${LINUX_SETUP_ZYPPER_REPO_DIR:-/etc/zypp/repos.d}"
 readonly GRUB_DEFAULT_FILE="${LINUX_SETUP_GRUB_DEFAULT_FILE:-/etc/default/grub}"
 readonly GRUB_DROPIN_DIR="${LINUX_SETUP_GRUB_DROPIN_DIR:-/etc/default/grub.d}"
 readonly GRUB_SPLASH_DROPIN="$GRUB_DROPIN_DIR/99-linux-setup-splash.cfg"
@@ -16,6 +24,7 @@ readonly UPDATE_INITRAMFS_COMMAND="${LINUX_SETUP_UPDATE_INITRAMFS_COMMAND:-/usr/
 DRY_RUN="${LINUX_SETUP_DRY_RUN:-0}"
 TEST_PACKAGE_FAMILY="${LINUX_SETUP_TEST_FAMILY:-}"
 WORK_DIR=""
+LOG_FILE=""
 
 PACKAGE_FAMILY=""
 DISTRO_NAME=""
@@ -28,6 +37,37 @@ NFS_SELECTED_REMOTE=""
 NFS_SELECTED_MOUNT=""
 FLATPAK_IDS=()
 FLATPAK_LABELS=()
+APP_KEYS=()
+APP_DESCRIPTIONS=()
+APP_NATIVE_APT=()
+APP_NATIVE_DNF=()
+APP_NATIVE_ZYPPER=()
+APP_DEB_DISCOVERY_TYPES=()
+APP_DEB_DISCOVERY_SOURCES=()
+APP_RPM_DISCOVERY_TYPES=()
+APP_RPM_DISCOVERY_SOURCES=()
+APP_ALIASES=()
+APP_DEB_URLS=()
+APP_DEB_VERSIONS=()
+APP_DEB_SHA256=()
+APP_DEB_CHECKSUM_URLS=()
+APP_RPM_URLS=()
+APP_RPM_VERSIONS=()
+APP_RPM_SHA256=()
+APP_RPM_CHECKSUM_URLS=()
+APP_FLATPAK_SOURCE_TYPES=()
+APP_FLATPAK_REMOTE_NAMES=()
+APP_FLATPAK_REPOSITORY_URLS=()
+APP_FLATPAK_REFS=()
+NATIVE_RESOLUTION_STATUS=""
+NATIVE_RESOLUTION_PACKAGE=""
+NATIVE_RESOLUTION_METHOD=""
+NATIVE_DOWNLOAD_URL=""
+NATIVE_CHECKSUM_URL=""
+NATIVE_EXPECTED_SHA256=""
+NATIVE_RESOLUTION_VERSION=""
+NATIVE_SOURCE_HOST=""
+NATIVE_CACHE_PATH=""
 
 die() {
   printf 'Erro: %s\n' "$*" >&2
@@ -42,13 +82,178 @@ warn() {
   printf '[AVISO] %s\n' "$*" >&2
 }
 
+start_logging() {
+  local timestamp
+
+  mkdir -p -- "$LOG_DIR" || die "Nao foi possivel criar o diretorio de logs: $LOG_DIR"
+  timestamp="$(date -u '+%Y%m%dT%H%M%SZ')"
+  LOG_FILE="${LINUX_SETUP_LOG_FILE:-$LOG_DIR/linux-setup-${timestamp}-$$.log}"
+  touch "$LOG_FILE" || die "Nao foi possivel criar o log: $LOG_FILE"
+  chmod 0600 "$LOG_FILE"
+  ln -sfn -- "$(basename "$LOG_FILE")" "$LOG_DIR/latest.log"
+  exec > >(tee -a "$LOG_FILE") 2>&1
+  printf '[LOG] inicio=%s pid=%s dry_run=%s arquivo=%s\n' "$timestamp" "$$" "$DRY_RUN" "$LOG_FILE"
+}
+
+log_event() {
+  local event="$1"
+  local status="$2"
+  local detail="${3:-}"
+
+  detail="${detail//$'\t'/ }"
+  detail="${detail//$'\n'/ }"
+  printf '[EVENT]\t%s\t%s\t%s\t%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$event" "$status" "$detail"
+}
+
 pause() {
   [[ -t 0 ]] || return 0
   read -r -p "Pressione Enter para continuar..." _
 }
 
 cleanup() {
+  local status=$?
   [[ -z "$WORK_DIR" || ! -d "$WORK_DIR" ]] || rm -rf -- "$WORK_DIR"
+  [[ -z "$LOG_FILE" ]] || log_event execution "$status" "encerramento"
+  return "$status"
+}
+
+repository_directories() {
+  case "$PACKAGE_FAMILY" in
+    apt) printf '%s\n' "$APT_SOURCE_DIR" "$APT_KEYRING_DIR" "$APT_SHARED_KEYRING_DIR" ;;
+    dnf) printf '%s\n' "$DNF_REPO_DIR" ;;
+    zypper) printf '%s\n' "$ZYPPER_REPO_DIR" ;;
+  esac
+}
+
+repository_snapshot() {
+  local directory
+
+  while IFS= read -r directory; do
+    [[ -d "$directory" ]] || continue
+    find "$directory" -maxdepth 1 -type f -printf '%p\n'
+  done < <(repository_directories) | LC_ALL=C sort -u
+}
+
+repository_artifact_matches_transaction() {
+  local path="$1"
+  local app_key="$2"
+  local package="$3"
+  local source_host="$4"
+  local basename_lower
+
+  basename_lower="$(basename "$path" | tr '[:upper:]' '[:lower:]')"
+  [[ "$basename_lower" == *"${app_key,,}"* ]] && return 0
+  [[ -n "$package" && "$basename_lower" == *"${package,,}"* ]] && return 0
+  [[ -n "$source_host" ]] && grep -aFqi -- "$source_host" "$path" 2>/dev/null
+}
+
+begin_repository_transaction() {
+  local app_key="$1"
+  local package="$2"
+  local source_host="${3:-}"
+  local path index=0 backup
+
+  if [[ "$DRY_RUN" == "1" ]]; then
+    info "[SIMULACAO] Iniciar rastreamento de fontes para $app_key."
+    return 0
+  fi
+  mkdir -p -- "$STATE_DIR"
+  rm -rf -- "$STATE_DIR/repository-originals"
+  mkdir -p -- "$STATE_DIR/repository-originals"
+  repository_snapshot > "$STATE_DIR/repository-before"
+  : > "$STATE_DIR/repository-original-manifest"
+  while IFS= read -r path; do
+    [[ -f "$path" ]] || continue
+    backup="$STATE_DIR/repository-originals/$index"
+    cp -a -- "$path" "$backup"
+    printf '%s\t%s\t%s\n' "$(sha256sum "$path" | awk '{print $1}')" "$path" "$backup" \
+      >> "$STATE_DIR/repository-original-manifest"
+    index=$((index + 1))
+  done < "$STATE_DIR/repository-before"
+  printf '%s\t%s\t%s\n' "$app_key" "$package" "$source_host" > "$STATE_DIR/repository-active"
+  chmod 0600 "$STATE_DIR/repository-before" "$STATE_DIR/repository-original-manifest" \
+    "$STATE_DIR/repository-active"
+}
+
+finish_repository_transaction() {
+  local app_key package source_host current path original_hash current_hash backup
+  local removed=0
+  local restored=0
+  local cleanup_failed=0
+
+  if [[ "$DRY_RUN" == "1" ]]; then
+    info "[SIMULACAO] Remover somente fontes novas relacionadas ao aplicativo."
+    return 0
+  fi
+  [[ -r "$STATE_DIR/repository-active" && -r "$STATE_DIR/repository-before" ]] || return 0
+  IFS=$'\t' read -r app_key package source_host < "$STATE_DIR/repository-active"
+  current="$(make_temp)"
+  repository_snapshot > "$current"
+  if [[ -r "$STATE_DIR/repository-original-manifest" ]]; then
+    while IFS=$'\t' read -r original_hash path backup; do
+      if [[ ! -f "$path" ]]; then
+        info "Restaurando fonte preexistente removida durante a instalacao: $path"
+        if run_as_root cp -a -- "$backup" "$path"; then
+          restored=1
+        else
+          warn "Nao foi possivel restaurar $path"
+          cleanup_failed=1
+        fi
+        continue
+      fi
+      current_hash="$(sha256sum "$path" | awk '{print $1}')" || {
+        cleanup_failed=1
+        continue
+      }
+      [[ "$current_hash" == "$original_hash" ]] && continue
+      if repository_artifact_matches_transaction "$path" "$app_key" "$package" "$source_host"; then
+        info "Restaurando conteudo preexistente alterado durante a instalacao: $path"
+        if run_as_root cp -a -- "$backup" "$path"; then
+          restored=1
+        else
+          warn "Nao foi possivel restaurar $path"
+          cleanup_failed=1
+        fi
+      else
+        warn "Fonte preexistente alterada foi preservada por nao corresponder a $app_key: $path"
+      fi
+    done < "$STATE_DIR/repository-original-manifest"
+  fi
+  while IFS= read -r path; do
+    [[ -f "$path" ]] || continue
+    if repository_artifact_matches_transaction "$path" "$app_key" "$package" "$source_host"; then
+      info "Removendo fonte de atualizacao criada durante a instalacao: $path"
+      if run_as_root rm -f -- "$path"; then
+        removed=1
+      else
+        warn "Nao foi possivel remover $path"
+        cleanup_failed=1
+      fi
+    else
+      warn "Novo arquivo de repositorio preservado por nao corresponder a $app_key: $path"
+    fi
+  done < <(comm -13 "$STATE_DIR/repository-before" "$current")
+  rm -f -- "$current"
+  if [[ "$removed" -eq 1 || "$restored" -eq 1 ]]; then
+    info "Atualizando metadados apos remover fontes temporarias."
+    case "$PACKAGE_FAMILY" in
+      apt) run_as_root apt-get update || warn "Falha ao atualizar metadados APT apos a limpeza." ;;
+      dnf) run_as_root dnf makecache || warn "Falha ao atualizar metadados DNF apos a limpeza." ;;
+      zypper) run_as_root zypper --non-interactive refresh || warn "Falha ao atualizar metadados Zypper apos a limpeza." ;;
+    esac
+  fi
+  if [[ "$cleanup_failed" -eq 1 ]]; then
+    warn "A transacao de repositorio permanece pendente para nova tentativa."
+    return 1
+  fi
+  rm -rf -- "$STATE_DIR/repository-active" "$STATE_DIR/repository-before" \
+    "$STATE_DIR/repository-original-manifest" "$STATE_DIR/repository-originals"
+}
+
+reconcile_repository_transaction() {
+  [[ -r "$STATE_DIR/repository-active" ]] || return 0
+  warn "Foi encontrada uma transacao de repositorio interrompida; iniciando limpeza seletiva."
+  finish_repository_transaction || die "Nao foi possivel concluir a limpeza da transacao anterior."
 }
 
 make_temp() {
@@ -62,24 +267,639 @@ trim_whitespace() {
   printf '%s\n' "$value"
 }
 
-load_flatpak_catalog() {
-  local raw_id raw_label id label
-  local -A seen=()
+load_app_catalog() {
+  local catalog_output
+  local key id label description apt_package dnf_package zypper_package
+  local deb_type deb_source rpm_type rpm_source aliases
+  local deb_url deb_version deb_sha256 deb_checksum_url
+  local rpm_url rpm_version rpm_sha256 rpm_checksum_url
+  local flatpak_source_type flatpak_remote flatpak_repository_url flatpak_ref
 
-  [[ -r "$FLATPAK_CATALOG" ]] || die "Catalogo Flatpak nao encontrado: $FLATPAK_CATALOG"
+  [[ -x "$CATALOG_TOOL" || -r "$CATALOG_TOOL" ]] ||
+    die "Ferramenta do catalogo nao encontrada: $CATALOG_TOOL"
+  catalog_output="$(python3 "$CATALOG_TOOL" export-tsv "$APP_LIBRARY")" ||
+    die "Nao foi possivel carregar a biblioteca: $APP_LIBRARY"
+  APP_KEYS=()
   FLATPAK_IDS=()
   FLATPAK_LABELS=()
-  while IFS='|' read -r _ raw_id raw_label _ _; do
-    id="$(trim_whitespace "${raw_id//\`/}")"
-    label="$(trim_whitespace "$raw_label")"
-    [[ "$id" =~ ^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)+$ ]] || continue
-    [[ -n "$label" ]] || die "Nome vazio para o Flatpak $id."
-    [[ -z "${seen[$id]:-}" ]] || die "ID Flatpak duplicado no catalogo: $id"
-    seen[$id]=1
+  APP_DESCRIPTIONS=()
+  APP_NATIVE_APT=()
+  APP_NATIVE_DNF=()
+  APP_NATIVE_ZYPPER=()
+  APP_DEB_DISCOVERY_TYPES=()
+  APP_DEB_DISCOVERY_SOURCES=()
+  APP_RPM_DISCOVERY_TYPES=()
+  APP_RPM_DISCOVERY_SOURCES=()
+  APP_ALIASES=()
+  APP_DEB_URLS=()
+  APP_DEB_VERSIONS=()
+  APP_DEB_SHA256=()
+  APP_DEB_CHECKSUM_URLS=()
+  APP_RPM_URLS=()
+  APP_RPM_VERSIONS=()
+  APP_RPM_SHA256=()
+  APP_RPM_CHECKSUM_URLS=()
+  APP_FLATPAK_SOURCE_TYPES=()
+  APP_FLATPAK_REMOTE_NAMES=()
+  APP_FLATPAK_REPOSITORY_URLS=()
+  APP_FLATPAK_REFS=()
+  while IFS='|' read -r key id label description apt_package dnf_package zypper_package \
+    deb_type deb_source rpm_type rpm_source aliases deb_url deb_version deb_sha256 deb_checksum_url \
+    rpm_url rpm_version rpm_sha256 rpm_checksum_url flatpak_source_type flatpak_remote \
+    flatpak_repository_url flatpak_ref || [[ -n "${key:-}" ]]; do
+    APP_KEYS+=("$key")
     FLATPAK_IDS+=("$id")
     FLATPAK_LABELS+=("$label")
-  done < "$FLATPAK_CATALOG"
-  [[ ${#FLATPAK_IDS[@]} -gt 0 ]] || die "O catalogo Flatpak nao contem aplicativos validos."
+    APP_DESCRIPTIONS+=("$description")
+    APP_NATIVE_APT+=("$apt_package")
+    APP_NATIVE_DNF+=("$dnf_package")
+    APP_NATIVE_ZYPPER+=("$zypper_package")
+    APP_DEB_DISCOVERY_TYPES+=("$deb_type")
+    APP_DEB_DISCOVERY_SOURCES+=("$deb_source")
+    APP_RPM_DISCOVERY_TYPES+=("$rpm_type")
+    APP_RPM_DISCOVERY_SOURCES+=("$rpm_source")
+    APP_ALIASES+=("$aliases")
+    APP_DEB_URLS+=("$deb_url")
+    APP_DEB_VERSIONS+=("$deb_version")
+    APP_DEB_SHA256+=("$deb_sha256")
+    APP_DEB_CHECKSUM_URLS+=("$deb_checksum_url")
+    APP_RPM_URLS+=("$rpm_url")
+    APP_RPM_VERSIONS+=("$rpm_version")
+    APP_RPM_SHA256+=("$rpm_sha256")
+    APP_RPM_CHECKSUM_URLS+=("$rpm_checksum_url")
+    APP_FLATPAK_SOURCE_TYPES+=("$flatpak_source_type")
+    APP_FLATPAK_REMOTE_NAMES+=("$flatpak_remote")
+    APP_FLATPAK_REPOSITORY_URLS+=("$flatpak_repository_url")
+    APP_FLATPAK_REFS+=("$flatpak_ref")
+  done <<< "$catalog_output"
+  [[ ${#APP_KEYS[@]} -gt 0 ]] || die "O catalogo nao contem aplicativos validos."
+}
+
+native_package_for_app() {
+  local index="$1"
+
+  case "$PACKAGE_FAMILY" in
+    apt) printf '%s\n' "${APP_NATIVE_APT[$index]}" ;;
+    dnf) printf '%s\n' "${APP_NATIVE_DNF[$index]}" ;;
+    zypper) printf '%s\n' "${APP_NATIVE_ZYPPER[$index]}" ;;
+  esac
+}
+
+resolve_native_package() {
+  local index="$1"
+  local package alias aliases
+  local -a alias_candidates=()
+
+  NATIVE_RESOLUTION_STATUS="NOT_FOUND"
+  NATIVE_RESOLUTION_PACKAGE=""
+  NATIVE_RESOLUTION_METHOD=""
+  NATIVE_DOWNLOAD_URL=""
+  NATIVE_CHECKSUM_URL=""
+  NATIVE_EXPECTED_SHA256=""
+  NATIVE_SOURCE_HOST=""
+  package="$(native_package_for_app "$index")"
+  aliases="${APP_ALIASES[$index]}"
+  if [[ -n "$package" ]]; then
+    query_native_repository "$package"
+    [[ "$NATIVE_RESOLUTION_STATUS" != "NOT_FOUND" ]] && return 0
+  fi
+  IFS=';' read -r -a alias_candidates <<< "$aliases"
+  for alias in "${alias_candidates[@]}"; do
+    [[ -n "$alias" && "$alias" != "$package" ]] || continue
+    query_native_repository "$alias"
+    [[ "$NATIVE_RESOLUTION_STATUS" != "NOT_FOUND" ]] && return 0
+  done
+  return 0
+}
+
+query_native_repository() {
+  local package="$1"
+  local output status
+
+  NATIVE_RESOLUTION_STATUS="NOT_FOUND"
+  NATIVE_RESOLUTION_PACKAGE=""
+
+  case "$PACKAGE_FAMILY" in
+    apt)
+      if ! output="$(LC_ALL=C apt-cache policy "$package" 2>&1)"; then
+        NATIVE_RESOLUTION_STATUS="ERROR"
+        return 0
+      fi
+      if grep -Eq '^[[:space:]]*Candidate:[[:space:]]+[^[:space:]]+' <<< "$output" &&
+        ! grep -Eq '^[[:space:]]*Candidate:[[:space:]]+\(none\)' <<< "$output"; then
+        NATIVE_RESOLUTION_STATUS="FOUND"
+        NATIVE_RESOLUTION_METHOD="repository"
+      fi
+      ;;
+    dnf)
+      if ! output="$(LC_ALL=C dnf -q repoquery --available --latest-limit 1 --qf '%{name}' "$package" 2>&1)"; then
+        NATIVE_RESOLUTION_STATUS="ERROR"
+        return 0
+      fi
+      if grep -Fxq "$package" <<< "$output"; then
+        NATIVE_RESOLUTION_STATUS="FOUND"
+        NATIVE_RESOLUTION_METHOD="repository"
+      fi
+      ;;
+    zypper)
+      if output="$(LC_ALL=C zypper --xmlout --non-interactive search --match-exact --type package "$package" 2>&1)"; then
+        if grep -Fq "name=\"$package\"" <<< "$output" || grep -Fq "name='$package'" <<< "$output"; then
+          NATIVE_RESOLUTION_STATUS="FOUND"
+          NATIVE_RESOLUTION_METHOD="repository"
+        fi
+      else
+        status=$?
+        [[ "$status" -eq 104 ]] || NATIVE_RESOLUTION_STATUS="ERROR"
+        return 0
+      fi
+      ;;
+  esac
+
+  [[ "$NATIVE_RESOLUTION_STATUS" == "FOUND" ]] && NATIVE_RESOLUTION_PACKAGE="$package"
+  return 0
+}
+
+http_get() {
+  local -a headers=(--header 'User-Agent: linux-setup')
+  [[ -z "${GITHUB_TOKEN:-}" ]] || headers+=(--header "Authorization: Bearer $GITHUB_TOKEN")
+  curl --fail --location --silent --show-error --connect-timeout 10 --max-time 120 --retry 2 \
+    "${headers[@]}" "$@"
+}
+
+architecture_asset_tokens() {
+  local architecture
+  architecture="$(native_system_architecture)" || return 1
+  case "$architecture" in
+    amd64|x86_64) printf '%s\n' 'amd64,x86_64,x64,all,noarch' ;;
+    arm64|aarch64) printf '%s\n' 'arm64,aarch64,all,noarch' ;;
+    *) printf '%s\n' "$architecture,all,noarch" ;;
+  esac
+}
+
+resolve_github_release() {
+  local repository="$1"
+  local extension tokens response result
+
+  command -v curl >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1 || return 2
+  case "$PACKAGE_FAMILY" in
+    apt) extension=.deb ;;
+    dnf|zypper) extension=.rpm ;;
+  esac
+  tokens="$(architecture_asset_tokens)" || return 2
+  response="$(http_get "https://api.github.com/repos/$repository/releases/latest")" || return 2
+  result="$(python3 -c '
+import json, re, sys
+extension, tokens = sys.argv[1], sys.argv[2].lower().split(",")
+data = json.load(sys.stdin)
+assets = data.get("assets", [])
+blocked = ("debug", "devel", "dbgsym", "symbols")
+candidates = []
+for asset in assets:
+    name = asset.get("name", "").lower()
+    if not name.endswith(extension) or any(word in name for word in blocked):
+        continue
+    if any(re.search(r"(?:^|[._+-])" + re.escape(token) + r"(?:[._+-]|$)", name) for token in tokens):
+        candidates.append(asset)
+if not candidates:
+    raise SystemExit(3)
+selected = candidates[0]
+name = selected.get("name", "")
+checksum = ""
+digest = selected.get("digest", "") or ""
+for asset in assets:
+    asset_name = asset.get("name", "")
+    if asset_name in (name + ".sha256", name + ".sha256sum"):
+        checksum = asset.get("browser_download_url", "")
+        break
+if digest.startswith("sha256:"):
+    digest = digest.removeprefix("sha256:")
+else:
+    digest = ""
+print("|".join((selected.get("browser_download_url", ""), checksum, digest, data.get("tag_name", ""))))
+' "$extension" "$tokens" <<< "$response")" || return $?
+  IFS='|' read -r NATIVE_DOWNLOAD_URL NATIVE_CHECKSUM_URL NATIVE_EXPECTED_SHA256 NATIVE_RESOLUTION_VERSION <<< "$result"
+  [[ "$NATIVE_DOWNLOAD_URL" == https://* ]] || return 2
+}
+
+resolve_apt_index() {
+  local specification="$1"
+  local package="$2"
+  local index_url base_url architecture content result relative_path
+
+  [[ "$PACKAGE_FAMILY" == "apt" ]] || return 3
+  command -v curl >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1 || return 2
+  specification="${specification#apt-index:}"
+  index_url="${specification%%;*}"
+  base_url="${specification#*;}"
+  architecture="$(native_system_architecture)" || return 2
+  content="$(http_get "$index_url")" || return 2
+  result="$(python3 -c '
+import sys
+package, architecture = sys.argv[1:]
+for block in sys.stdin.read().split("\n\n"):
+    fields = {}
+    for line in block.splitlines():
+        if ": " in line:
+            key, value = line.split(": ", 1)
+            fields[key] = value
+    if fields.get("Package") == package and fields.get("Architecture") in (architecture, "all"):
+      print("|".join((fields.get("Filename", ""), fields.get("SHA256", ""), fields.get("Version", ""))))
+    raise SystemExit(0)
+' "$package" "$architecture" <<< "$content")" || return 2
+      IFS='|' read -r relative_path NATIVE_EXPECTED_SHA256 NATIVE_RESOLUTION_VERSION <<< "$result"
+  [[ -n "$relative_path" ]] || return 3
+  NATIVE_DOWNLOAD_URL="${base_url%/}/${relative_path#/}"
+  [[ "$NATIVE_DOWNLOAD_URL" == https://* ]] || return 2
+}
+
+resolve_deb_download_page() {
+  local page_url="$1"
+  local content result
+
+  [[ "$PACKAGE_FAMILY" == "apt" ]] || return 3
+  command -v curl >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1 || return 2
+  content="$(http_get "$page_url")" || return 2
+  result="$(python3 -c '
+import html, re, sys
+content = html.unescape(sys.stdin.read()).replace("\\/", "/")
+urls = re.findall(r"https://downloads\.slack-edge\.com/[^\"\x27<>\s]+\.deb", content)
+if not urls:
+    raise SystemExit(3)
+print(urls[0])
+' <<< "$content")" || return $?
+  NATIVE_DOWNLOAD_URL="$result"
+  [[ "$NATIVE_DOWNLOAD_URL" =~ ^https://downloads\.slack-edge\.com/.+\.deb$ ]] || return 2
+}
+
+resolve_external_package() {
+  local index="$1"
+  local package resolver source result
+
+  NATIVE_RESOLUTION_STATUS="NOT_FOUND"
+  NATIVE_RESOLUTION_PACKAGE=""
+  NATIVE_RESOLUTION_METHOD=""
+  NATIVE_DOWNLOAD_URL=""
+  NATIVE_CHECKSUM_URL=""
+  NATIVE_EXPECTED_SHA256=""
+  NATIVE_RESOLUTION_VERSION=""
+  NATIVE_SOURCE_HOST=""
+  package="$(native_package_for_app "$index")"
+  case "$PACKAGE_FAMILY" in
+    apt)
+      resolver="${APP_DEB_DISCOVERY_TYPES[$index]}"
+      source="${APP_DEB_DISCOVERY_SOURCES[$index]}"
+      ;;
+    dnf|zypper)
+      resolver="${APP_RPM_DISCOVERY_TYPES[$index]}"
+      source="${APP_RPM_DISCOVERY_SOURCES[$index]}"
+      ;;
+  esac
+  [[ -n "$package" && "$resolver" != "none" ]] || return 0
+
+  if [[ "$DRY_RUN" == "1" ]]; then
+    NATIVE_RESOLUTION_STATUS="FOUND"
+    NATIVE_RESOLUTION_PACKAGE="$package"
+    NATIVE_RESOLUTION_METHOD="external"
+    NATIVE_DOWNLOAD_URL="${source%%;*}"
+    NATIVE_SOURCE_HOST="simulacao"
+    return 0
+  fi
+
+  result=0
+  case "$resolver:$source" in
+    github:*) resolve_github_release "$source" || result=$? ;;
+    direct:https://*)
+      NATIVE_DOWNLOAD_URL="$source"
+      case "$PACKAGE_FAMILY:$NATIVE_DOWNLOAD_URL" in
+        apt:*.deb|dnf:*.rpm|zypper:*.rpm) ;;
+        *) result=3 ;;
+      esac
+      ;;
+    page-deb:https://*) resolve_deb_download_page "$source" || result=$? ;;
+    redirect-deb:https://*)
+      [[ "$PACKAGE_FAMILY" == "apt" ]] && NATIVE_DOWNLOAD_URL="$source" || result=3
+      ;;
+    redirect-rpm:https://*)
+      [[ "$PACKAGE_FAMILY" =~ ^(dnf|zypper)$ ]] && NATIVE_DOWNLOAD_URL="$source" || result=3
+      ;;
+    apt-index:https://*) resolve_apt_index "apt-index:$source" "$package" || result=$? ;;
+    manual:*) result=3 ;;
+    *) result=2 ;;
+  esac
+  case "$result" in
+    0)
+      NATIVE_RESOLUTION_STATUS="FOUND"
+      NATIVE_RESOLUTION_PACKAGE="$package"
+      NATIVE_RESOLUTION_METHOD="external"
+      NATIVE_SOURCE_HOST="${NATIVE_DOWNLOAD_URL#https://}"
+      NATIVE_SOURCE_HOST="${NATIVE_SOURCE_HOST%%/*}"
+      ;;
+    3) NATIVE_RESOLUTION_STATUS="NOT_FOUND" ;;
+    *) NATIVE_RESOLUTION_STATUS="ERROR" ;;
+  esac
+}
+
+resolve_app_package() {
+  local index="$1"
+
+  resolve_native_package "$index"
+  [[ "$NATIVE_RESOLUTION_STATUS" == "NOT_FOUND" ]] || return 0
+  resolve_external_package "$index"
+}
+
+verify_download_checksum() {
+  local path="$1"
+  local checksum_url="$2"
+  local checksum_file expected actual
+
+  if [[ -n "$NATIVE_EXPECTED_SHA256" ]]; then
+    actual="$(sha256sum "$path" | awk '{print $1}')" || return 1
+    [[ "${actual,,}" == "${NATIVE_EXPECTED_SHA256,,}" ]]
+    return
+  fi
+  [[ -n "$checksum_url" ]] || {
+    info "Checksum oficial nao publicado; confianca limitada a HTTPS e validacao do pacote."
+    return 0
+  }
+  checksum_file="$(make_temp)"
+  http_get --output "$checksum_file" "$checksum_url" || return 1
+  expected="$(grep -Eio '[a-f0-9]{64}' "$checksum_file" | head -n 1)"
+  [[ -n "$expected" ]] || return 1
+  actual="$(sha256sum "$path" | awk '{print $1}')" || return 1
+  [[ "${actual,,}" == "${expected,,}" ]]
+}
+
+find_verified_cached_package() {
+  local directory="$1"
+  local extension="$2"
+  local package="$3"
+  local path
+
+  [[ "$NATIVE_RESOLUTION_METHOD" == "external" ]] || return 1
+  [[ -n "$NATIVE_EXPECTED_SHA256" || -n "$NATIVE_CHECKSUM_URL" ]] || return 1
+  while IFS= read -r -d '' path; do
+    native_package_is_compatible "$path" "$package" || continue
+    if verify_download_checksum "$path" "$NATIVE_CHECKSUM_URL"; then
+      NATIVE_CACHE_PATH="$path"
+      return 0
+    fi
+  done < <(find "$directory" -maxdepth 1 -type f -iname "*.${extension}" -print0)
+  return 1
+}
+
+run_in_directory() {
+  local directory="$1"
+  shift
+
+  if [[ "$DRY_RUN" == "1" ]]; then
+    printf '[SIMULACAO] (cd %q &&' "$directory"
+    printf ' %q' "$@"
+    printf ')\n'
+    return 0
+  fi
+  printf '[EXEC] (cd %q &&' "$directory"
+  printf ' %q' "$@"
+  printf ')\n'
+  (cd -- "$directory" && "$@")
+}
+
+native_system_architecture() {
+  local architecture
+  architecture="$(uname -m)"
+  case "$PACKAGE_FAMILY:$architecture" in
+    apt:x86_64) printf '%s\n' amd64 ;;
+    apt:aarch64) printf '%s\n' arm64 ;;
+    apt:*) printf '%s\n' "$architecture" ;;
+    dnf:*|zypper:*) printf '%s\n' "$architecture" ;;
+  esac
+}
+
+native_package_identity() {
+  local path="$1"
+
+  case "$PACKAGE_FAMILY" in
+    apt) dpkg-deb -f "$path" Package Architecture 2>/dev/null | paste -sd ' ' - ;;
+    dnf|zypper) rpm -qp --queryformat '%{NAME} %{ARCH}' "$path" 2>/dev/null ;;
+  esac
+}
+
+native_package_is_compatible() {
+  local path="$1"
+  local expected_package="$2"
+  local identity package architecture system_architecture
+
+  identity="$(native_package_identity "$path")" || return 1
+  read -r package architecture <<< "$identity"
+  [[ "$package" == "$expected_package" ]] || return 1
+  system_architecture="$(native_system_architecture)" || return 1
+  case "$PACKAGE_FAMILY" in
+    apt) [[ "$architecture" == "$system_architecture" || "$architecture" == "all" ]] ;;
+    dnf|zypper) [[ "$architecture" == "$system_architecture" || "$architecture" == "noarch" ]] ;;
+  esac
+}
+
+prune_cached_package() {
+  local directory="$1"
+  local extension="$2"
+  local expected_package="$3"
+  local keep_path="$4"
+  local path identity package
+
+  while IFS= read -r -d '' path; do
+    [[ "$path" == "$keep_path" ]] && continue
+    identity="$(native_package_identity "$path")" || continue
+    read -r package _ <<< "$identity"
+    [[ "$package" == "$expected_package" ]] && rm -f -- "$path"
+  done < <(find "$directory" -maxdepth 1 -type f -iname "*.${extension}" -print0)
+  return 0
+}
+
+download_native_package() {
+  local package="$1"
+  local directory extension temporary_directory path destination architecture filename
+  local -a downloaded=()
+
+  NATIVE_CACHE_PATH=""
+  case "$PACKAGE_FAMILY" in
+    apt)
+      directory="$DEB_DIR"
+      extension="deb"
+      ;;
+    dnf|zypper)
+      directory="$RPM_DIR"
+      extension="rpm"
+      ;;
+  esac
+  if [[ "$DRY_RUN" == "1" ]]; then
+    if [[ "$NATIVE_RESOLUTION_METHOD" == "external" ]]; then
+      printf '[SIMULACAO] curl --output %q %q\n' "$directory/${package}.DRY-RUN.${extension}" "$NATIVE_DOWNLOAD_URL"
+    else
+      printf '[SIMULACAO] baixar %q pelo gerenciador %q\n' "$package" "$PACKAGE_FAMILY"
+    fi
+    NATIVE_CACHE_PATH="$directory/${package}.DRY-RUN.${extension}"
+    return 0
+  fi
+  mkdir -p -- "$directory"
+  if find_verified_cached_package "$directory" "$extension" "$package"; then
+    info "Reutilizando pacote validado do cache: $NATIVE_CACHE_PATH"
+    return 0
+  fi
+  temporary_directory="$(mktemp -d "$WORK_DIR/download.XXXXXX")"
+
+  if [[ "$NATIVE_RESOLUTION_METHOD" == "external" ]]; then
+    filename="${NATIVE_DOWNLOAD_URL%%\?*}"
+    filename="$(basename "$filename")"
+    [[ "$filename" == *."$extension" ]] || filename="${package}.${extension}"
+    path="$temporary_directory/$filename"
+    run_command curl --fail --location --show-error --connect-timeout 10 --max-time 600 --retry 2 \
+      --output "$path" "$NATIVE_DOWNLOAD_URL" || return 1
+    if [[ "$DRY_RUN" != "1" ]]; then
+      verify_download_checksum "$path" "$NATIVE_CHECKSUM_URL" || {
+        warn "Falha ao validar o checksum publicado para $package."
+        return 1
+      }
+    fi
+  else
+    case "$PACKAGE_FAMILY" in
+      apt)
+        run_in_directory "$temporary_directory" apt-get download "$package" || return 1
+        ;;
+      dnf)
+        architecture="$(native_system_architecture)" || return 1
+        run_command dnf -q download --destdir "$temporary_directory" --arch "$architecture,noarch" "$package" || return 1
+        ;;
+      zypper)
+        run_command zypper --non-interactive download --directory "$temporary_directory" "$package" || return 1
+        ;;
+    esac
+  fi
+
+  while IFS= read -r -d '' path; do
+    native_package_is_compatible "$path" "$package" && downloaded+=("$path")
+  done < <(find "$temporary_directory" -maxdepth 1 -type f -iname "*.${extension}" -print0)
+  [[ ${#downloaded[@]} -eq 1 ]] || {
+    warn "O download de $package nao produziu exatamente um pacote compativel."
+    return 1
+  }
+
+  destination="$directory/$(basename "${downloaded[0]}")"
+  mv -f -- "${downloaded[0]}" "$destination"
+  prune_cached_package "$directory" "$extension" "$package" "$destination"
+  NATIVE_CACHE_PATH="$destination"
+}
+
+package_file_has_format() {
+  local path="$1"
+  local family="$2"
+  local signature
+
+  signature="$(od -An -tx1 -N8 "$path" 2>/dev/null | tr -d '[:space:]')"
+  case "$family" in
+    apt) [[ "$signature" == 213c617263683e0a* ]] ;;
+    dnf|zypper) [[ "$signature" == edabeedb* ]] ;;
+  esac
+}
+
+download_resolved_cache_asset() {
+  local package="$1"
+  local target_family="$2"
+  local directory extension filename temporary destination
+
+  case "$target_family" in
+    apt) directory="$DEB_DIR"; extension=deb ;;
+    dnf|zypper) directory="$RPM_DIR"; extension=rpm ;;
+  esac
+  filename="${NATIVE_DOWNLOAD_URL%%\?*}"
+  filename="$(basename "$filename")"
+  [[ "$filename" == *."$extension" ]] || filename="${package}.${extension}"
+  destination="$directory/$filename"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    printf '[SIMULACAO] cache %s: curl --output %q %q\n' \
+      "$target_family" "$destination" "$NATIVE_DOWNLOAD_URL"
+    return 0
+  fi
+
+  mkdir -p -- "$directory"
+  if [[ -f "$destination" ]] &&
+    [[ -n "$NATIVE_EXPECTED_SHA256" || -n "$NATIVE_CHECKSUM_URL" ]] &&
+    verify_download_checksum "$destination" "$NATIVE_CHECKSUM_URL" &&
+    package_file_has_format "$destination" "$target_family"; then
+    info "Cache $target_family ja esta atualizado: $destination"
+    return 0
+  fi
+  temporary="$(mktemp "$WORK_DIR/cache.XXXXXX")"
+  run_command curl --fail --location --show-error --connect-timeout 10 --max-time 600 --retry 2 \
+    --output "$temporary" "$NATIVE_DOWNLOAD_URL" || return 1
+  verify_download_checksum "$temporary" "$NATIVE_CHECKSUM_URL" || return 1
+  package_file_has_format "$temporary" "$target_family" || {
+    warn "A fonte de $package nao produziu um pacote .$extension valido."
+    return 1
+  }
+  mv -f -- "$temporary" "$destination"
+  info "Pacote armazenado no cache $target_family: $destination"
+}
+
+cache_app_package_for_family() {
+  local index="$1"
+  local target_family="$2"
+  local package
+
+  PACKAGE_FAMILY="$target_family"
+  package="$(native_package_for_app "$index")"
+  [[ -n "$package" ]] || return 3
+  NATIVE_RESOLUTION_PACKAGE="$package"
+  NATIVE_RESOLUTION_METHOD="catalog"
+  case "$target_family" in
+    apt)
+      NATIVE_DOWNLOAD_URL="${APP_DEB_URLS[$index]}"
+      NATIVE_RESOLUTION_VERSION="${APP_DEB_VERSIONS[$index]}"
+      NATIVE_EXPECTED_SHA256="${APP_DEB_SHA256[$index]}"
+      NATIVE_CHECKSUM_URL="${APP_DEB_CHECKSUM_URLS[$index]}"
+      ;;
+    dnf|zypper)
+      NATIVE_DOWNLOAD_URL="${APP_RPM_URLS[$index]}"
+      NATIVE_RESOLUTION_VERSION="${APP_RPM_VERSIONS[$index]}"
+      NATIVE_EXPECTED_SHA256="${APP_RPM_SHA256[$index]}"
+      NATIVE_CHECKSUM_URL="${APP_RPM_CHECKSUM_URLS[$index]}"
+      ;;
+  esac
+  [[ -n "$NATIVE_DOWNLOAD_URL" ]] || return 3
+  download_resolved_cache_asset "$package" "$target_family"
+}
+
+cache_application_packages() {
+  local index="$1"
+  local key="${APP_KEYS[$index]}"
+  local original_family="$PACKAGE_FAMILY"
+  local target_family result success=0
+
+  for target_family in apt dnf; do
+    result=0
+    cache_app_package_for_family "$index" "$target_family" || result=$?
+    case "$result" in
+      0)
+        success=1
+        log_event cache-download OK "$key family=$target_family"
+        ;;
+      3) log_event cache-download NOT_FOUND "$key family=$target_family" ;;
+      *) log_event cache-download ERROR "$key family=$target_family" ;;
+    esac
+  done
+  PACKAGE_FAMILY="$original_family"
+  [[ "$success" -eq 1 ]]
+}
+
+install_cached_native_package() {
+  local path="$1"
+
+  case "$PACKAGE_FAMILY" in
+    apt)
+      update_package_metadata
+      run_as_root apt-get install -y -- "$path"
+      ;;
+    dnf) run_as_root dnf install -y -- "$path" ;;
+    zypper) run_as_root zypper --non-interactive install -- "$path" ;;
+  esac
 }
 
 ensure_local_package_directories() {
@@ -93,6 +913,9 @@ run_command() {
     printf '\n'
     return 0
   fi
+  printf '[EXEC]'
+  printf ' %q' "$@"
+  printf '\n'
   "$@"
 }
 
@@ -1246,6 +2069,7 @@ checklist() {
     for index in "${!ids_ref[@]}"; do
       printf '%2d. [%s] %s' "$((index + 1))" "${states_ref[$index]}" "${labels_ref[$index]}"
       [[ "${states_ref[$index]}" == "i" ]] && printf ' (ja instalado)'
+      [[ "${states_ref[$index]}" == "!" ]] && printf ' (indisponivel)'
       printf '\n'
     done
     printf '\nNumeros alternam itens; a=todos; n=nenhum; c=continuar; q=cancelar.\n'
@@ -1261,12 +2085,12 @@ checklist() {
         ;;
       a|A)
         for index in "${!states_ref[@]}"; do
-          [[ "${states_ref[$index]}" != "i" ]] && states_ref[index]="x"
+          [[ "${states_ref[$index]}" == " " ]] && states_ref[index]="x"
         done
         ;;
       n|N)
         for index in "${!states_ref[@]}"; do
-          [[ "${states_ref[$index]}" != "i" ]] && states_ref[index]=" "
+          [[ "${states_ref[$index]}" == "x" ]] && states_ref[index]=" "
         done
         ;;
       *)
@@ -1274,7 +2098,7 @@ checklist() {
           [[ "$token" =~ ^[0-9]+$ ]] || continue
           index=$((token - 1))
           ((index >= 0 && index < ${#states_ref[@]})) || continue
-          [[ "${states_ref[$index]}" == "i" ]] && continue
+          [[ "${states_ref[$index]}" =~ ^(i|!)$ ]] && continue
           if [[ "${states_ref[$index]}" == "x" ]]; then
             states_ref[index]=" "
           else
@@ -1290,20 +2114,155 @@ flatpak_is_installed() {
   flatpak info --system "$1" >/dev/null 2>&1 || flatpak info --user "$1" >/dev/null 2>&1
 }
 
-flatpak_menu() {
-  local -a states=()
-  local -a selected=()
-  local id index
+flatpak_is_installed_in_scope() {
+  local scope="$1"
+  local id="$2"
+  flatpak info "--$scope" "$id" >/dev/null 2>&1
+}
 
-  for id in "${FLATPAK_IDS[@]}"; do
-    if command -v flatpak >/dev/null 2>&1 && flatpak_is_installed "$id"; then
-      states+=("i")
+install_flatpak_app() {
+  local id="$1"
+
+  install_native_packages flatpak
+  run_as_root flatpak remote-add --system --if-not-exists flathub \
+    https://dl.flathub.org/repo/flathub.flatpakrepo
+  if flatpak_is_installed "$id"; then
+    info "$id ja esta instalado."
+  else
+    run_as_root flatpak install --system -y flathub "$id"
+  fi
+}
+
+remove_flatpak_after_native_install() {
+  local id="$1"
+
+  command -v flatpak >/dev/null 2>&1 || return 0
+  if flatpak_is_installed_in_scope system "$id"; then
+    run_as_root flatpak uninstall --system -y "$id" || return 1
+  fi
+  if flatpak_is_installed_in_scope user "$id"; then
+    run_command flatpak uninstall --user -y "$id" || return 1
+  fi
+}
+
+app_index_for_key() {
+  local key="$1"
+  local index
+
+  for index in "${!APP_KEYS[@]}"; do
+    [[ "${APP_KEYS[$index]}" == "$key" ]] && {
+      printf '%s\n' "$index"
+      return 0
+    }
+  done
+  return 1
+}
+
+cached_native_package_for_app() {
+  local index="$1"
+  local package directory extension path identity cached_package
+
+  NATIVE_CACHE_PATH=""
+  package="$(native_package_for_app "$index")"
+  [[ -n "$package" ]] || return 1
+  case "$PACKAGE_FAMILY" in
+    apt)
+      directory="$DEB_DIR"
+      extension="deb"
+      ;;
+    dnf|zypper)
+      directory="$RPM_DIR"
+      extension="rpm"
+      ;;
+  esac
+  [[ -d "$directory" ]] || return 1
+  while IFS= read -r -d '' path; do
+    native_package_is_compatible "$path" "$package" || continue
+    identity="$(native_package_identity "$path")" || continue
+    read -r cached_package _ <<< "$identity"
+    [[ "$cached_package" == "$package" ]] || continue
+    NATIVE_CACHE_PATH="$path"
+    return 0
+  done < <(find "$directory" -maxdepth 1 -type f -iname "*.${extension}" -print0 | sort -z)
+  return 1
+}
+
+install_app_with_fallback() {
+  local index="$1"
+  local allow_flatpak_fallback="${2:-0}"
+  local key="${APP_KEYS[$index]}"
+  local flatpak_id="${FLATPAK_IDS[$index]}"
+  local package
+
+  log_event application START "$key"
+  package="$(native_package_for_app "$index")"
+  if [[ -n "$package" ]] && is_native_package_installed "$package"; then
+    info "${FLATPAK_LABELS[$index]} ja esta instalado como pacote nativo."
+  elif cached_native_package_for_app "$index"; then
+    log_event cache FOUND "$key package=$package cache=$NATIVE_CACHE_PATH"
+    info "Instalando $package do cache local: $NATIVE_CACHE_PATH"
+    if ! install_cached_native_package "$NATIVE_CACHE_PATH"; then
+      log_event installation ERROR "$key package=$package cache=$NATIVE_CACHE_PATH"
+      warn "Falha ao instalar o pacote em cache de $key; o Flatpak foi preservado."
+      return 1
+    fi
+    if [[ "$DRY_RUN" != "1" ]] && ! is_native_package_installed "$package"; then
+      log_event installation ERROR "$key verificacao-pos-instalacao"
+      warn "A instalacao de $package nao foi confirmada; o Flatpak foi preservado."
+      return 1
+    fi
+  else
+    log_event cache NOT_FOUND "$key package=${package:-none}"
+    if [[ "$allow_flatpak_fallback" != "1" ]]; then
+      log_event application ERROR "$key cache-ausente fallback=disabled"
+      warn "Nenhum pacote compativel em cache para $key; fallback Flathub desativado."
+      return 1
+    fi
+    info "Nenhum pacote compativel em cache para $key; usando Flathub."
+    if install_flatpak_app "$flatpak_id"; then
+      log_event application OK "$key method=flatpak"
+      return 0
+    fi
+    log_event application ERROR "$key method=flatpak"
+    return 1
+  fi
+
+  log_event installation OK "$key method=native package=$package"
+  remove_flatpak_after_native_install "$flatpak_id" || {
+    log_event flatpak-removal PARTIAL "$key id=$flatpak_id"
+    warn "$key foi instalado nativamente, mas o Flatpak duplicado nao foi removido."
+    return 1
+  }
+  log_event application OK "$key method=native"
+}
+
+application_menu() {
+  local -a states=()
+  local -a selected=() labels=()
+  local id index key package selected_index allow_flatpak_fallback=0
+
+  for index in "${!APP_KEYS[@]}"; do
+    key="${APP_KEYS[$index]}"
+    id="${FLATPAK_IDS[$index]}"
+    package="$(native_package_for_app "$index")"
+    if [[ -n "$package" ]] && is_native_package_installed "$package"; then
+      if command -v flatpak >/dev/null 2>&1 && flatpak_is_installed "$id"; then
+        states+=(" ")
+        labels+=("${FLATPAK_LABELS[$index]} - remover Flatpak duplicado")
+      else
+        states+=("i")
+        labels+=("${FLATPAK_LABELS[$index]} - nativo")
+      fi
+    elif cached_native_package_for_app "$index"; then
+      states+=(" ")
+      labels+=("${FLATPAK_LABELS[$index]} - cache: $(basename "$NATIVE_CACHE_PATH")")
     else
       states+=(" ")
+      labels+=("${FLATPAK_LABELS[$index]} - sem pacote compativel no cache")
     fi
   done
 
-  checklist "Instalacoes Flatpak" FLATPAK_IDS FLATPAK_LABELS states || return 0
+  checklist "Instalar aplicativos do cache local" APP_KEYS labels states || return 0
   selected=("${CHECKLIST_RESULT[@]}")
   if [[ ${#selected[@]} -eq 0 ]]; then
     info "Nenhum aplicativo selecionado."
@@ -1313,22 +2272,134 @@ flatpak_menu() {
 
   printf '\nAplicativos selecionados:\n'
   printf '  - %s\n' "${selected[@]}"
-  confirm "Instalar estes Flatpaks no escopo do sistema?" || return 0
+  confirm "Iniciar a instalacao dos aplicativos selecionados?" || return 0
+  if confirm "Usar Flathub quando nao houver pacote compativel no cache?"; then
+    allow_flatpak_fallback=1
+  fi
+  log_event fallback-policy OK "flathub=$allow_flatpak_fallback aplicativos=${#selected[@]}"
 
-  case "$PACKAGE_FAMILY" in
-    apt|dnf|zypper) install_native_packages flatpak ;;
-  esac
-  run_as_root flatpak remote-add --system --if-not-exists flathub \
-    https://dl.flathub.org/repo/flathub.flatpakrepo
-
-  for id in "${selected[@]}"; do
-    if flatpak_is_installed "$id"; then
-      info "$id ja esta instalado."
-    else
-      run_as_root flatpak install --system -y flathub "$id"
-    fi
+  for key in "${selected[@]}"; do
+    selected_index="$(app_index_for_key "$key")" || {
+      warn "Aplicativo desconhecido no catalogo: $key"
+      continue
+    }
+    install_app_with_fallback "$selected_index" "$allow_flatpak_fallback" || true
   done
   pause
+}
+
+application_cache_menu() {
+  local -a states=() selected=()
+  local key selected_index
+
+  for _ in "${APP_KEYS[@]}"; do
+    states+=(" ")
+  done
+  checklist "Preparar cache local (DEB e RPM)" APP_KEYS FLATPAK_LABELS states || return 0
+  selected=("${CHECKLIST_RESULT[@]}")
+  if [[ ${#selected[@]} -eq 0 ]]; then
+    info "Nenhum aplicativo selecionado."
+    pause
+    return 0
+  fi
+
+  printf '\nAplicativos selecionados para cache:\n'
+  printf '  - %s\n' "${selected[@]}"
+  confirm "Baixar os pacotes DEB e RPM disponiveis?" || return 0
+  for key in "${selected[@]}"; do
+    selected_index="$(app_index_for_key "$key")" || continue
+    cache_application_packages "$selected_index" ||
+      warn "Nenhum pacote DEB ou RPM foi armazenado para $key."
+  done
+  pause
+}
+
+catalog_update_format() {
+  local index="$1"
+  local target_family="$2"
+  local format checked_at status
+
+  format="$([[ "$target_family" == apt ]] && printf deb || printf rpm)"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    printf '[SIMULACAO] consultar fonte %s de %s e atualizar somente o catalogo\n' \
+      "$format" "${APP_KEYS[$index]}"
+    return 0
+  fi
+  PACKAGE_FAMILY="$target_family"
+  resolve_external_package "$index"
+  status="$NATIVE_RESOLUTION_STATUS"
+  checked_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  python3 "$CATALOG_TOOL" update-resolved "$APP_LIBRARY" "${APP_KEYS[$index]}" "$format" \
+    "$status" "$checked_at" "$NATIVE_DOWNLOAD_URL" "$NATIVE_RESOLUTION_VERSION" \
+    "$NATIVE_EXPECTED_SHA256" "$NATIVE_CHECKSUM_URL"
+}
+
+catalog_update_application() {
+  local index="$1"
+  local original_family="$PACKAGE_FAMILY"
+  local target_family result success=0
+
+  for target_family in apt dnf; do
+    result=0
+    catalog_update_format "$index" "$target_family" || result=$?
+    if [[ "$result" -eq 0 ]]; then
+      success=1
+      log_event catalog-update OK "${APP_KEYS[$index]} family=$target_family"
+    else
+      log_event catalog-update ERROR "${APP_KEYS[$index]} family=$target_family"
+    fi
+  done
+  PACKAGE_FAMILY="$original_family"
+  [[ "$success" -eq 1 ]]
+}
+
+application_catalog_update_menu() {
+  local -a states=() selected=()
+  local key selected_index
+
+  for _ in "${APP_KEYS[@]}"; do
+    states+=("x")
+  done
+  checklist "Atualizar links do catalogo" APP_KEYS FLATPAK_LABELS states || return 0
+  selected=("${CHECKLIST_RESULT[@]}")
+  [[ ${#selected[@]} -gt 0 ]] || return 0
+  confirm "Consultar novas versoes para os itens selecionados?" || return 0
+  for key in "${selected[@]}"; do
+    selected_index="$(app_index_for_key "$key")" || continue
+    catalog_update_application "$selected_index" ||
+      warn "Nao foi possivel atualizar as fontes de $key."
+  done
+  load_app_catalog
+  pause
+}
+
+application_library_menu() {
+  python3 "$CATALOG_TOOL" manage "$APP_LIBRARY" $([[ "$DRY_RUN" == "1" ]] && printf -- '--dry-run')
+  load_app_catalog
+  pause
+}
+
+applications_menu() {
+  local option
+
+  while true; do
+    print_header
+    printf 'Aplicativos\n\n'
+    printf '1. Preparar cache local (DEB e RPM)\n'
+    printf '2. Instalar aplicativos do cache\n'
+    printf '3. Atualizar catalogo de links\n'
+    printf '4. Gerenciar biblioteca\n'
+    printf '0. Voltar\n\n'
+    read -r -p "> " option
+    case "$option" in
+      1) application_cache_menu ;;
+      2) application_menu ;;
+      3) application_catalog_update_menu ;;
+      4) application_library_menu ;;
+      0) return 0 ;;
+      *) warn "Opcao invalida."; pause ;;
+    esac
+  done
 }
 
 package_file_metadata() {
@@ -1488,14 +2559,14 @@ main_menu() {
   while true; do
     print_header
     printf '1. Configuracoes\n'
-    printf '2. Instalacoes Flatpak\n'
+    printf '2. Aplicativos\n'
     printf '3. Instalacoes de pacotes locais (.deb/.rpm)\n'
     printf '4. Sair\n\n'
     read -r -p "> " option
 
     case "$option" in
       1) configuration_menu ;;
-      2) flatpak_menu ;;
+      2) applications_menu ;;
       3) local_package_menu ;;
       4) return 0 ;;
       *) warn "Opcao invalida."; pause ;;
@@ -1514,12 +2585,16 @@ main() {
     "") ;;
     *) die "Argumento desconhecido: $1" ;;
   esac
+  start_logging
   WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/linux-setup.XXXXXX")"
   chmod 0700 "$WORK_DIR"
-  trap cleanup EXIT INT TERM
+  trap cleanup EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
   detect_platform
+  reconcile_repository_transaction
   ensure_local_package_directories
-  load_flatpak_catalog
+  load_app_catalog
   main_menu
 }
 

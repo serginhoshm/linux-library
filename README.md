@@ -5,9 +5,10 @@ Biblioteca interativa e idempotente para pós-instalação Linux. O ponto de ent
 ## Estrutura
 
 - [linux-setup.sh](linux-setup.sh) — instalações e configurações do sistema.
-- [flatpak-apps.md](flatpak-apps.md) — catálogo editável de aplicativos Flatpak.
+- `apps/` — biblioteca editável, com um Markdown por aplicativo.
 - `deb/` — pacotes locais para sistemas APT.
 - `rpm/` — pacotes locais para sistemas DNF ou Zypper.
+- `logs/` — registros locais de execução; `latest.log` aponta para o mais recente.
 - [current-config](current-config/) — inventário dos hosts em uso e histórico técnico.
 
 As pastas `deb/` e `rpm/` são criadas pelo script quando necessário. Seus pacotes são ignorados pelo Git; apenas os arquivos `.gitkeep` que preservam as pastas são versionados.
@@ -40,15 +41,21 @@ As configurações de serviços requerem `systemd`. O script usa Bash 4.3 ou mai
    - Swapfile e zram
    - Flameshot com integração Wayland
    - Boot com splash em sistemas APT
-2. **Instalações Flatpak**
-   - Checklist carregado de [flatpak-apps.md](flatpak-apps.md).
-   - Itens já instalados aparecem com `[i]` e não são reinstalados.
+2. **Aplicativos**
+   - **Preparar cache local** usa o checklist da biblioteca `apps/` e tenta baixar os formatos DEB e RPM disponíveis, independentemente da família do sistema atual.
+   - Fontes externas compatíveis podem fornecer a família oposta. Pacotes disponíveis apenas no repositório configurado da distribuição atual são armazenados somente no formato dessa distribuição.
+   - **Instalar aplicativos do cache** considera apenas o pacote compatível já presente em `deb/` ou `rpm/`; essa etapa não pesquisa nem baixa pacotes nativos.
+   - Antes de percorrer os aplicativos selecionados, pergunta uma única vez se a ausência de pacote compatível deve usar Flathub ou resultar em falha.
+   - Uma falha ao instalar um pacote do cache preserva o Flatpak existente e não é mascarada pelo fallback.
+   - Após confirmar a instalação nativa, remove a cópia Flatpak nos escopos do sistema e do usuário sem apagar seus dados.
 3. **Pacotes locais**
    - Em sistemas APT, apresenta os arquivos da pasta `deb/`.
    - Em sistemas DNF ou Zypper, apresenta os arquivos da pasta `rpm/`.
    - Formatos incompatíveis e arquivos inválidos são ignorados.
    - A ferramenta nativa resolve as dependências disponíveis nos repositórios.
-4. **Sair**
+4. **Gerenciar biblioteca**
+   - Lista, adiciona, edita, remove e valida links de aplicativos.
+5. **Sair**
 
 Nos checklists, informe um ou mais números para alternar a seleção. Use `a` para selecionar todos, `n` para limpar, `c` para continuar e `q` para cancelar.
 
@@ -66,7 +73,9 @@ Para revisar comandos e navegar nos menus sem aplicar alterações:
 ./linux-setup.sh --dry-run
 ```
 
-O Flatpak é configurado no escopo do sistema. Metadados dos repositórios são atualizados no máximo uma vez por execução.
+O fallback Flatpak é configurado no escopo do sistema. Metadados dos repositórios são atualizados no máximo uma vez por execução.
+
+Cada execução grava terminal, comandos e eventos em `logs/linux-setup-*.log`. Os arquivos têm permissão `0600`, não são versionados e podem ser consultados pelo atalho `logs/latest.log`. Para compartilhar um diagnóstico, preserve o arquivo completo, pois os eventos distinguem resolução, download, instalação, fallback e encerramento.
 
 ### Boot com splash
 
@@ -85,19 +94,35 @@ rpm/aplicativo.rpm
 
 Esses arquivos permanecem somente na máquina local e não aparecem no Git.
 
-## Catálogo Flatpak
+## Catálogo de aplicativos
 
-O catálogo precisa permanecer na mesma pasta de `linux-setup.sh`. Para adicionar, remover ou renomear uma opção, edite a tabela em [flatpak-apps.md](flatpak-apps.md). Cada linha precisa manter este formato:
+Cada aplicativo vive em `apps/<chave>.md`. O arquivo contém texto Markdown legível e um bloco JSON validado com os pacotes, fontes de descoberta, links DEB/RPM resolvidos, versões, checksums e origem Flatpak. A manutenção pode ser feita pelo menu **Aplicativos > Gerenciar biblioteca** ou editando o arquivo e executando `python3 catalog-tool.py validate apps`.
 
-```markdown
-| `org.example.Application` | Nome exibido | Descrição curta |
+```json
+{
+   "schema_version": 1,
+   "key": "exemplo",
+   "packages": {"apt": "exemplo", "dnf": "exemplo", "zypper": ""},
+   "deb": {"discovery": {"type": "github", "source": "org/projeto"}},
+   "rpm": {"discovery": {"type": "github", "source": "org/projeto"}},
+   "flatpak": {"id": "org.example.App", "source_type": "remote"}
+}
 ```
 
-O script ignora o cabeçalho da tabela, valida o formato dos IDs e interrompe a execução se encontrar IDs duplicados ou um catálogo vazio.
+Use valores vazios quando uma família não tiver candidato. **Atualizar catálogo** consulta as fontes de descoberta e atualiza somente os links resolvidos de cada Markdown; **Preparar cache** é o único fluxo que baixa bytes.
+
+Ao preparar o cache, o motor consulta o nome da família atual e aliases exatos nos metadados do APT, DNF ou Zypper. Também consulta a fonte externa separadamente para DEB e RPM; GitHub aceita `GITHUB_TOKEN` opcional para ampliar o limite da API. A ausência de um formato é registrada sem impedir que o outro seja armazenado.
+
+Downloads externos usam HTTPS, timeout e tentativas limitadas. SHA-256 oficial é verificado quando publicado. Na família atual, nome e arquitetura são validados pelos metadados internos do pacote; na família oposta, o arquivo precisa ter a assinatura estrutural DEB/RPM e será validado integralmente quando instalado em uma distribuição compatível. Um pacote externo em cache só é reutilizado quando o checksum oficial atual o confirma. Sem checksum, uma nova cópia é baixada.
+
+Antes da instalação, o script fotografa os arquivos de fontes e chaves da família. Depois, remove somente arquivos novos cujo nome ou conteúdo corresponda ao aplicativo, pacote ou host da origem, atualiza os metadados e preserva tudo que já existia. Uma transação interrompida é reconciliada na próxima execução.
 
 ## Idempotência e segurança
 
 - Pacotes e Flatpaks já instalados são detectados antes da instalação.
+- O Flatpak só é removido depois que a instalação nativa é confirmada; dados do aplicativo não são apagados.
+- Falhas na remoção Flatpak são registradas como resultado parcial.
+- Repositórios e chaves preexistentes nunca são removidos pela transação de aplicativos.
 - Arquivos gerenciados só são substituídos quando o conteúdo muda.
 - O script cria um backup `.linux-setup.bak` antes da primeira alteração de cada configuração existente.
 - Entradas de NFS e swap não são duplicadas no `/etc/fstab`.
@@ -106,7 +131,7 @@ O script ignora o cabeçalho da tabela, valida o formato dos IDs e interrompe a 
 
 Samba guest, FTP, NFS e o RPC do Transmission preservam os padrões permissivos da biblioteca anterior. Use essas opções somente em uma rede doméstica confiável e leia o aviso exibido antes da confirmação.
 
-Signal está disponível via Flatpak. Instalação nativa do Signal e drivers NVIDIA/RPM Fusion não fazem parte do script unificado.
+Drivers NVIDIA e configuração do RPM Fusion não fazem parte do motor de aplicativos.
 
 ## Sistemas registrados
 

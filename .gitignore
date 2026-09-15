@@ -1,4 +1,8 @@
 deb/*
 rpm/*
+logs/*
+.linux-setup-state/*
+__pycache__/
 !deb/.gitkeep
 !rpm/.gitkeep
+!logs/.gitkeep
